@@ -13,11 +13,12 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# lab 루트를 import 경로에 (evalkit/plr_schema 재사용 — 서버는 lab의 채점 코드를
-# 직접 import한다; 업로드된 코드는 절대 import하지 않는다)
-_LAB_ROOT = Path(__file__).resolve().parent.parent
-if str(_LAB_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LAB_ROOT))
+# 이 레포 루트를 import 경로에 — vendored evalkit/plr_schema(공유 계약 복본)를
+# 로드하기 위함. lab 레포를 역참조하지 않는다(self-contained).
+# 업로드된 표면 코드는 절대 import하지 않는다(RCE 방지).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
