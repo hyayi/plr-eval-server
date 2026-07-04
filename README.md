@@ -6,6 +6,9 @@ lab 레포(`../plr-prompt-lab`)의 `lab submit` 클라이언트가 `attributes.j
 표면 번들(surface .tgz)을 업로드하면, 서버가 채점·지표 저장·HTML 렌더까지 수행한다.
 업로드된 surface `.py` 파일은 **절대 import/실행하지 않는다** (RCE-safe; 저장·열람·diff 전용).
 
+> **연동 튜토리얼**: 서버 기동부터 lab push/submit·리더보드까지 복붙으로 따라 하는
+> 실습은 lab 레포의 [`docs/TUTORIAL.md`](../plr-prompt-lab/docs/TUTORIAL.md) 참고.
+
 ---
 
 ## 실행
