@@ -135,6 +135,9 @@ def diff_page(request: Request, a: str, b: str):
             if not p.is_file():
                 continue
             rel = str(p.relative_to(base))
+            # last-write-wins: 한 run이 같은 이름 프롬프트를 여러 버전 담은 경우
+            # (S4 이전 전-버전 번들) 정규화 키가 충돌해 마지막 것만 남는다 — S4 이후
+            # run은 단일 버전이라 무해. 레거시 번들에서만 발생.
             out[_diff_norm_key(rel)] = (rel, p.read_text(encoding="utf-8", errors="replace"))
         return out
 

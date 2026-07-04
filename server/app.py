@@ -434,7 +434,10 @@ def run_detail(run_id: str) -> dict:
 async def delete_run(run_id: str) -> dict:
     """run 삭제 — 디렉터리(runs/<id>) 제거 + DB의 runs·metrics 행 삭제.
     디렉터리를 지우므로 기동 복구(reconcile_and_rebuild)가 되살리지 않는다
-    (파일 없음 → 리플레이할 것 없음)."""
+    (파일 없음 → 리플레이할 것 없음).
+
+    label_audit 행은 의도적으로 건드리지 않는다 — 그건 "그때 무엇을 재채점했나"의
+    불변 이력이라, 삭제된 run_id를 참조해도 정합성 문제가 아니다(FK 없음)."""
     root, conn = STATE["root"], STATE["conn"]
     run_dir = root / "runs" / run_id
     if not run_dir.is_dir():
