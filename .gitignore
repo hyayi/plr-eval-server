@@ -12,3 +12,6 @@ crops/
 
 # 쿠버네티스 매니페스트 — 토큰(Secret)·환경별 값 포함, 커밋 금지
 k8s/eval-server.yaml
+
+# OMC 세션 상태(prd/specs/state) — 레포에 불필요
+.omc/
