@@ -16,12 +16,15 @@ import hashlib
 from pathlib import Path
 
 # 공유 계약 파일 (repo 루트 기준 상대경로). 순서 고정 — manifest 재현성.
+#
+# 서버는 채점(scoring→dataset)과 해시 대조(provenance)에만 이 둘을 쓴다.
+# evalkit/validate.py + plr_schema.py + schema/vocab.yaml 은 라벨 어휘(enum)
+# 검증용인데, 그 검증은 클라이언트 `lab validate-dataset` 소관이고 서버는 그것을
+# 신뢰하므로(SPEC:41) 더 이상 공유가 아니라 **lab 전용**이다 — 서버는 push 시
+# 구조 가드만 돌린다(plr_schema/vocab 를 vendoring 하지 않음).
 SHARED_FILES: tuple[str, ...] = (
     "evalkit/dataset.py",       # attribute_spec/resolve_json_path/load_* — 채점·클라이언트 공용
     "evalkit/provenance.py",    # prompt_hash/surface_relpaths — 서버 해시 대조에 필요
-    "evalkit/validate.py",      # validate_dataset — 데이터셋 형식 검증(push 시 서버·검증 시 클라)
-    "plr_schema.py",            # validate.py 가 import; vocab.yaml 로더
-    "schema/vocab.yaml",        # plr_schema 의 어휘 단일 원천
 )
 
 

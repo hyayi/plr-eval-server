@@ -72,12 +72,10 @@ def health() -> dict:
 # Datasets API (AC1, AC12)
 # =====================================================================
 
-import io  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import shutil  # noqa: E402
 import tempfile  # noqa: E402
-from contextlib import redirect_stdout  # noqa: E402
 from datetime import datetime  # noqa: E402
 
 from fastapi import File, Form, HTTPException, UploadFile  # noqa: E402
@@ -91,15 +89,40 @@ from server.storage import (  # noqa: E402
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-\.]{0,63}$")
 
 
-def _validate_report(ds_dir) -> tuple[bool, str]:
-    """validate_dataset의 PASS/WARN/FAIL 리포트를 구조화해 반환
-    (verbose=True여야 줄이 출력됨 — redirect_stdout으로 포집)."""
-    from evalkit.validate import validate_dataset
+def _require_valid_dataset_structure(ds_dir) -> None:
+    """데이터셋 구조 가드 — 채점에 필요한 형식만 확인(manifest 파싱 · labels.jsonl
+    의 obj_id 행 · crops 이미지 존재). 라벨 값의 어휘(enum) 검증은 클라이언트
+    `lab validate-dataset` 소관이며 서버는 그 검증을 신뢰하고 재검증하지 않는다
+    (attributes.jsonl 과 동일한 신뢰 모델 — SPEC:41). 그래서 서버는 plr_schema/
+    vocab.yaml 을 vendoring 하지 않는다."""
+    import yaml
 
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        ok = validate_dataset(ds_dir, verbose=True)
-    return ok, buf.getvalue()
+    try:
+        meta = yaml.safe_load((ds_dir / "manifest.yaml").read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"manifest.yaml parse 실패: {exc}")
+    if not isinstance(meta, dict):
+        raise HTTPException(422, "manifest.yaml 이 매핑이 아님")
+
+    labels = ds_dir / "labels.jsonl"
+    if not labels.exists():
+        raise HTTPException(422, "labels.jsonl 없음")
+    n = 0
+    for lineno, line in enumerate(labels.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            if "obj_id" not in json.loads(line):
+                raise KeyError("obj_id 누락")
+        except Exception as exc:  # noqa: BLE001 — 첫 위반 지점 그대로 보고
+            raise HTTPException(422, f"labels.jsonl line {lineno}: {exc}")
+        n += 1
+    if n == 0:
+        raise HTTPException(422, "labels.jsonl 이 비어있음")
+
+    crops = ds_dir / "crops"
+    if not crops.is_dir() or not any(crops.glob("*.jpg")):
+        raise HTTPException(422, "crops/ 에 이미지(.jpg)가 없음")
 
 
 async def _save_upload(upload: UploadFile, dest) -> None:
@@ -146,9 +169,7 @@ async def register_dataset(
         if ds_root is None:
             raise HTTPException(400, "manifest.yaml not found in archive "
                                      "(최상위 또는 단일 하위 디렉터리에 있어야 함)")
-        ok, report = _validate_report(ds_root)
-        if not ok:
-            raise HTTPException(422, f"validate-dataset FAILED:\n{report}")
+        _require_valid_dataset_structure(ds_root)
 
         created_at = datetime.now().isoformat(timespec="seconds")
         (ds_root / "registered.json").write_text(json.dumps(
@@ -163,7 +184,7 @@ async def register_dataset(
             n_crops = len(list((dest / "crops").glob("*.jpg")))
             dbm.upsert_dataset(conn, name, created_at, created_by,
                                n_crops, declared_attributes(dest))
-        return {"name": name, "n_crops": n_crops, "report": report}
+        return {"name": name, "n_crops": n_crops}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

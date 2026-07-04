@@ -104,3 +104,24 @@ def test_structurally_broken_row_rejected(client):
                     files={"attributes": ("attributes.jsonl", bad, "application/json"),
                            "surface": ("s.tgz", _surface_targz(), "application/gzip")})
     assert r.status_code == 422
+
+
+def test_dataset_push_structure_guard_rejects_missing_labels(tmp_path, monkeypatch):
+    """데이터셋 push 구조 가드: labels.jsonl 이 없으면 422. 라벨 어휘(enum) 검증은
+    클라이언트 `lab validate-dataset` 소관이라 서버는 재검증하지 않지만(plr_schema/
+    vocab vendoring 없음), 채점에 필요한 구조는 지킨다."""
+    monkeypatch.setenv("EVAL_SERVER_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("EVAL_SERVER_TOKEN", "sekrit")
+    from server.app import app
+
+    img = io.BytesIO()
+    Image.new("RGB", (60, 90), (90, 90, 90)).save(img, format="JPEG")
+    no_labels = _targz_bytes({  # manifest + crops 있으나 labels.jsonl 누락
+        "manifest.yaml": b"n: 1\ncreated: '2026-07-04'\nsource_note: t\nattributes:\n  gender: {}\n",
+        "crops/a.jpg": img.getvalue(),
+    })
+    with TestClient(app) as c:
+        r = c.post("/api/datasets", headers=TOKEN,
+                   files={"archive": ("d.tgz", no_labels, "application/gzip")},
+                   data={"name": "broken_ds"})
+        assert r.status_code == 422, f"labels.jsonl 없는 데이터셋은 거부돼야: {r.status_code}"

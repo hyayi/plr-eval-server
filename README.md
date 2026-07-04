@@ -52,8 +52,13 @@ PYTHONPATH 설정 불필요 — 이 레포가 self-contained 이므로 `tests/` 
 
 `contract/CONTRACT.md` 참조.
 
-`evalkit/dataset.py`, `evalkit/provenance.py`, `evalkit/validate.py`,
-`plr_schema.py`, `schema/vocab.yaml` 은 lab 레포와 **byte-identical 복본**으로 관리됩니다.
+`evalkit/dataset.py`, `evalkit/provenance.py` 두 파일만 lab 레포와
+**byte-identical 복본**으로 관리됩니다 (채점·해시 대조에 필요).
+
+라벨 어휘(enum) 검증(`validate.py`/`plr_schema.py`/`vocab.yaml`)은 **vendoring 하지
+않습니다** — 그 검증은 클라이언트 `lab validate-dataset` 소관이고 서버는 그것을
+신뢰합니다(SPEC:41). 서버는 데이터셋 push 시 구조 가드(manifest 파싱·labels.jsonl·
+crops 존재)만 돌립니다.
 
 - 원천: `../plr-prompt-lab` (lab 레포)
 - 드리프트 감지: `tests/test_contract_parity.py` (양쪽 레포 동일 존재)
