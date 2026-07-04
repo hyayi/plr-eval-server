@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}업로드{% endblock %}
+{% block body %}
+<h1>업로드</h1>
+<div class="sub">서버 토큰이 설정된 경우 토큰을 입력하세요. CLI(<code>lab dataset-push</code> / <code>lab submit</code>)가 더 편합니다.</div>
+
+<div class="card">
+<h2>데이터셋 등록</h2>
+<label>토큰</label><input id="t1" type="password" style="width:260px">
+<label>이름</label><input id="dname" style="width:260px" placeholder="gender_v1">
+<label>등록자</label><input id="dby" style="width:260px">
+<label>tar.gz (crops/ + labels.jsonl + manifest.yaml)</label><input id="dfile" type="file">
+<p><button onclick="up1()">등록</button></p>
+<pre id="out1" style="display:none"></pre>
+</div>
+
+<div class="card">
+<h2>run 제출</h2>
+<div class="sub">CLI 권장 — 표면 번들(surface_relpaths)과 run_provenance는 <code>lab submit</code>이 자동 생성합니다.</div>
+<label>토큰</label><input id="t2" type="password" style="width:260px">
+<label>데이터셋 이름</label><input id="rds" style="width:260px">
+<label>version_label</label><input id="rver" style="width:260px">
+<label>제출자</label><input id="rby" style="width:260px">
+<label>attributes.jsonl</label><input id="rattrs" type="file">
+<label>surface.tar.gz</label><input id="rsurf" type="file">
+<label>run_provenance.json (선택)</label><input id="rprov" type="file">
+<p><button onclick="up2()">제출</button></p>
+<pre id="out2" style="display:none"></pre>
+</div>
+{% endblock %}
+{% block script %}<script>
+async function post(url, fd, token, outId){
+  const out=document.getElementById(outId); out.style.display='block'; out.textContent='업로드 중…';
+  const r=await fetch(url,{method:url.includes('labels')?'PATCH':'POST',
+    headers:token?{'X-Auth-Token':token}:{}, body:fd});
+  out.textContent = r.status+'\n'+await r.text();
+}
+function up1(){
+  const fd=new FormData();
+  fd.append('name',document.getElementById('dname').value);
+  fd.append('created_by',document.getElementById('dby').value);
+  fd.append('archive',document.getElementById('dfile').files[0]);
+  post('/api/datasets',fd,document.getElementById('t1').value,'out1');
+}
+function up2(){
+  const fd=new FormData();
+  fd.append('dataset',document.getElementById('rds').value);
+  fd.append('version_label',document.getElementById('rver').value);
+  fd.append('submitted_by',document.getElementById('rby').value);
+  fd.append('attributes',document.getElementById('rattrs').files[0]);
+  fd.append('surface',document.getElementById('rsurf').files[0]);
+  const p=document.getElementById('rprov').files[0];
+  if(p) fd.append('provenance',p);
+  post('/api/runs',fd,document.getElementById('t2').value,'out2');
+}
+</script>{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}데이터셋 — plr-eval-server{% endblock %}
+{% block body %}
+<h1>plr-eval-server</h1>
+<div class="sub">데이터셋별 프롬프트 리더보드 — run은 append-only, 라벨 정정 시 자동 재채점</div>
+{% if not datasets %}<div class="card">등록된 데이터셋이 없습니다 — <a href="/upload">업로드</a>에서 등록하거나 <code>lab dataset-push</code>를 쓰세요.</div>{% endif %}
+<table id="ds"><thead><tr>
+<th>dataset</th><th>attributes</th><th>crops</th><th>runs</th><th>등록자</th><th>등록일</th>
+</tr></thead><tbody>
+{% for d in datasets %}
+<tr>
+<td><a href="/d/{{ d.name }}">{{ d.name }}</a></td>
+<td>{{ d.attributes | join(', ') }}</td>
+<td data-v="{{ d.n_crops }}">{{ d.n_crops }}</td>
+<td data-v="{{ counts.get(d.name, 0) }}">{{ counts.get(d.name, 0) }}</td>
+<td>{{ d.created_by }}</td><td>{{ d.created_at[:10] }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}
+{% block script %}<script>sortable('ds')</script>{% endblock %}

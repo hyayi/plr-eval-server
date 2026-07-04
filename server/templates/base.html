@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}plr-eval-server{% endblock %}</title>
+<style>
+:root{--bg:#0b1120;--panel:#111a2e;--panel2:#16213b;--line:#263452;--text:#dbe4f5;
+      --muted:#8fa1c0;--acc:#38bdf8;--green:#34d399;--red:#f87171;--amber:#fbbf24}
+*{box-sizing:border-box}
+body{margin:0;padding:26px 20px 60px;color:var(--text);line-height:1.55;background:var(--bg);
+     font-family:'Pretendard','Noto Sans KR','Malgun Gothic','Segoe UI',sans-serif}
+main{max-width:1100px;margin:0 auto}
+h1{font-size:21px;margin:0 0 4px} h2{font-size:16px;margin:26px 0 10px}
+a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+nav{margin-bottom:18px;font-size:13px}
+table{border-collapse:collapse;font-size:13px;width:100%;margin:8px 0}
+th,td{border:1px solid var(--line);padding:5px 10px;text-align:left;white-space:nowrap}
+th{background:var(--panel2);color:#e8f2ff;cursor:pointer;user-select:none}
+th.sorted-asc::after{content:" ▲"} th.sorted-desc::after{content:" ▼"}
+tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+code,pre{font-family:ui-monospace,Consolas,monospace}
+code{font-size:.9em;background:var(--panel2);border-radius:4px;padding:1px 5px}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;font-size:12px;overflow-x:auto}
+.badge{display:inline-block;font-size:10.5px;font-weight:700;border-radius:5px;padding:0 7px;margin-left:5px}
+.badge.warn{background:rgba(251,191,36,.15);color:var(--amber);border:1px solid rgba(251,191,36,.4)}
+.badge.ok{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.35)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:10px 0;font-size:13px}
+input,select,button,textarea{background:var(--panel2);color:var(--text);border:1px solid var(--line);
+  border-radius:8px;padding:6px 10px;font-size:13px}
+button{cursor:pointer;border-color:var(--acc)}
+label{display:block;margin:10px 0 4px;color:var(--muted);font-size:12.5px}
+.del{color:var(--red)} .add{color:var(--green)} .hunk{color:var(--acc)}
+</style>
+</head>
+<body><main>
+<nav><a href="/">데이터셋</a> · <a href="/upload">업로드</a></nav>
+{% block body %}{% endblock %}
+</main>
+<script>
+// 테이블 헤더 클릭 정렬 (숫자/문자 자동 판별) — 외부 라이브러리 없음
+function sortable(tableId){
+  const t=document.getElementById(tableId); if(!t) return;
+  t.querySelectorAll('th').forEach((th,i)=>th.addEventListener('click',()=>{
+    const asc=!th.classList.contains('sorted-asc');
+    t.querySelectorAll('th').forEach(h=>h.classList.remove('sorted-asc','sorted-desc'));
+    th.classList.add(asc?'sorted-asc':'sorted-desc');
+    const rows=[...t.tBodies[0].rows];
+    rows.sort((r1,r2)=>{
+      const a=r1.cells[i].dataset.v??r1.cells[i].textContent.trim();
+      const b=r2.cells[i].dataset.v??r2.cells[i].textContent.trim();
+      const na=parseFloat(a),nb=parseFloat(b);
+      const cmp=(!isNaN(na)&&!isNaN(nb))?na-nb:String(a).localeCompare(String(b));
+      return asc?cmp:-cmp;
+    });
+    rows.forEach(r=>t.tBodies[0].appendChild(r));
+  }));
+}
+</script>
+{% block script %}{% endblock %}
+</body></html>

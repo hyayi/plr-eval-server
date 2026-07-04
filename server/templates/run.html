@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ run_id }}{% endblock %}
+{% block body %}
+<h1>{{ run_id }}</h1>
+<div class="sub"><a href="/d/{{ meta.dataset }}">{{ meta.dataset }}</a> · {{ meta.version_label }}
+ {% if not meta.hash_verified %}<span class="badge warn">⚠ 해시 미검증</span>{% else %}<span class="badge ok">✓ 검증됨</span>{% endif %}
+ {% if meta.git_dirty %}<span class="badge warn">dirty</span>{% endif %}</div>
+
+<div class="card">
+model <code>{{ meta.model }}</code> · max_tokens {{ meta.max_tokens }} · temperature {{ meta.temperature }}
+· reason {{ meta.reason_toggle }} · 제출 {{ meta.submitted_at }} ({{ meta.submitted_by }})<br>
+surface_hash <code>{{ meta.surface_hash }}</code>
+{% if meta.claimed_surface_hash and meta.claimed_surface_hash != meta.surface_hash %}
+ · 주장값 <code class="del">{{ meta.claimed_surface_hash }}</code>{% endif %}
+{% if prov %} · lab_sha <code>{{ prov.lab_sha[:10] }}</code>{% endif %}
+</div>
+
+<h2>지표 (속성별)</h2>
+{% if skipped %}<div class="sub">라벨 없어 skip: {{ skipped | join(', ') }}</div>{% endif %}
+<table id="mx"><thead><tr><th>attribute</th><th>n</th><th>accuracy</th><th>macro F1</th>
+<th>pred_unknown</th><th>bias</th></tr></thead><tbody>
+{% for a, m in metrics.items() %}
+<tr><td>{{ a }}</td><td>{{ m.n }}</td>
+<td data-v="{{ m.accuracy }}">{{ m.accuracy }}</td>
+<td data-v="{{ m.macro_f1 if m.macro_f1 is not none else -1 }}">{{ m.macro_f1 if m.macro_f1 is not none else '—' }}</td>
+<td>{{ m.pred_unknown.rate }} ({{ m.pred_unknown.count }})</td>
+<td>{% if m.bias %}{{ m.bias.pair }}: {{ m.bias.rate }}{% else %}—{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+
+{% for a, m in metrics.items() %}
+<h2>{{ a }} — confusion (행=정답)</h2>
+<table><thead><tr><th></th>{% for c in m.confusion.keys() %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
+{% for t, row in m.confusion.items() %}
+<tr><th>{{ t }}</th>{% for c in m.confusion.keys() %}<td>{{ row.get(c, 0) }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody></table>
+{% endfor %}
+
+<h2>표면 파일 (보관본 — 열람 전용)</h2>
+<div class="card">
+{% for f in surface_files %}
+<a href="/r/{{ run_id }}/surface/{{ f }}"><code>{{ f }}</code></a><br>
+{% endfor %}
+</div>
+{% endblock %}
+{% block script %}<script>sortable('mx')</script>{% endblock %}

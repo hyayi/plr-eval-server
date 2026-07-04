@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+datasets/
+runs/
+data/
+*.db
+*.db-wal
+*.db-shm
+crops/

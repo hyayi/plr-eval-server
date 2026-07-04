@@ -1,0 +1,19 @@
+# 예시 compose — 사내 서버에서:
+#   docker compose -f server/docker-compose.example.yml up -d --build
+services:
+  plr-eval-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: plr-eval-server
+    ports:
+      - "8890:8890"          # 사내 LAN 전용 — 공인망 노출 금지
+    environment:
+      - EVAL_SERVER_TOKEN=change-me   # 변이 API 토큰 (등록/제출/정정)
+      - EVAL_SERVER_DATA=/data
+    volumes:
+      - eval_server_data:/data
+    restart: unless-stopped
+
+volumes:
+  eval_server_data:

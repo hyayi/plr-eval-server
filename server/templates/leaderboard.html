@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ dataset }} 리더보드{% endblock %}
+{% block body %}
+<h1>{{ dataset }} <span class="sub" style="display:inline">리더보드</span></h1>
+<div class="sub">
+  {% if all_history %}전체 이력 · <a href="/d/{{ dataset }}">버전명당 최신만</a>
+  {% else %}버전명당 최신 run · <a href="/d/{{ dataset }}?all=1">전체 이력 보기</a>{% endif %}
+  — 컬럼 클릭으로 정렬 · 두 run 선택 후 <button onclick="gotoDiff()">비교(diff)</button>
+</div>
+{% if not rows %}<div class="card">아직 run이 없습니다 — <code>lab submit</code> 또는 <a href="/upload">업로드</a>.</div>{% endif %}
+<table id="lb"><thead><tr>
+<th>선택</th><th>run</th><th>version</th><th>무결성</th>
+<th>macro F1</th><th>macro acc</th><th>micro acc</th>
+{% for a in attrs %}<th>{{ a }} acc</th><th>{{ a }} F1</th>{% endfor %}
+<th>model</th><th>제출자</th><th>제출시각</th>
+</tr></thead><tbody>
+{% for r in rows %}
+<tr>
+<td><input type="checkbox" class="sel" value="{{ r.run_id }}"></td>
+<td><a href="/r/{{ r.run_id }}">{{ r.run_id }}</a></td>
+<td>{{ r.version_label }}</td>
+<td>{% if not r.hash_verified %}<span class="badge warn" title="번들 해시가 run 시점 지문과 불일치 — 보관본이 실행 당시 상태가 아닐 수 있음">⚠ 미검증</span>{% else %}<span class="badge ok">✓</span>{% endif %}
+    {% if r.git_dirty %}<span class="badge warn" title="커밋 안 된 수정으로 실행됨">dirty</span>{% endif %}</td>
+<td data-v="{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else -1 }}">{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else '—' }}</td>
+<td data-v="{{ r.aggregate.macro_acc if r.aggregate.macro_acc is not none else -1 }}">{{ r.aggregate.macro_acc if r.aggregate.macro_acc is not none else '—' }}</td>
+<td data-v="{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else -1 }}">{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else '—' }}</td>
+{% for a in attrs %}
+{% set m = r.metrics.get(a, {}) %}
+<td data-v="{{ m.get('accuracy', -1) }}">{{ m.get('accuracy', '—') }}</td>
+<td data-v="{{ m.get('macro_f1', -1) }}">{{ m.get('macro_f1', '—') }}</td>
+{% endfor %}
+<td>{{ r.model }}</td><td>{{ r.submitted_by }}</td><td>{{ r.submitted_at[:16] }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+
+{% if audit %}
+<h2>라벨 정정 이력</h2>
+<table><thead><tr><th>시각</th><th>정정자</th><th>변경</th><th>재채점 run 수</th></tr></thead><tbody>
+{% for a in audit %}
+<tr><td>{{ a.changed_at[:16] }}</td><td>{{ a.changed_by }}</td><td>{{ a.diff_summary }}</td>
+<td>{{ (a.rescored_runs | fromjson) | length if a.rescored_runs else 0 }}</td></tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}
+{% block script %}<script>
+sortable('lb');
+function gotoDiff(){
+  const sel=[...document.querySelectorAll('.sel:checked')].map(c=>c.value);
+  if(sel.length!==2){alert('두 run을 선택하세요');return;}
+  location.href='/diff?a='+sel[0]+'&b='+sel[1];
+}
+</script>{% endblock %}

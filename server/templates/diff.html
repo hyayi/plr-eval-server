@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}diff {{ a }} vs {{ b }}{% endblock %}
+{% block body %}
+<h1>표면 비교</h1>
+<div class="sub"><a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a></div>
+
+<h2>실행 파라미터 (run_provenance)</h2>
+<table><thead><tr><th>param</th><th>{{ a }}</th><th>{{ b }}</th></tr></thead><tbody>
+{% for k, va, vb in params %}
+<tr {% if va != vb %}style="outline:1px solid rgba(251,191,36,.5)"{% endif %}>
+<td>{{ k }}</td><td>{{ va }}</td><td>{{ vb }}</td></tr>
+{% endfor %}
+</tbody></table>
+
+<h2>파일 diff ({{ diffs | length }}개 파일 상이)</h2>
+{% if not diffs %}<div class="card">표면 파일이 완전히 동일합니다 — 차이는 파라미터/환경에서 찾으세요.</div>{% endif %}
+{% for d in diffs %}
+<h2><code>{{ d.path }}</code></h2>
+<pre>{% for line in d.diff.splitlines() %}{% if line.startswith('+') and not line.startswith('+++') %}<span class="add">{{ line }}</span>
+{% elif line.startswith('-') and not line.startswith('---') %}<span class="del">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="hunk">{{ line }}</span>
+{% else %}{{ line }}
+{% endif %}{% endfor %}</pre>
+{% endfor %}
+{% endblock %}

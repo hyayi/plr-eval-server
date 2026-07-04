@@ -1,0 +1,6 @@
+# eval-server 전용 의존성 — lab requirements.txt와 의도적으로 분리
+# (lab은 GPU-free 경로에서 서버 스택 없이 동작해야 함)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+jinja2>=3.1
