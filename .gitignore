@@ -9,3 +9,6 @@ data/
 *.db-wal
 *.db-shm
 crops/
+
+# 쿠버네티스 매니페스트 — 토큰(Secret)·환경별 값 포함, 커밋 금지
+k8s/eval-server.yaml
