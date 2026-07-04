@@ -52,12 +52,11 @@ def index(request: Request):
 @router.get("/d/{dataset}", response_class=HTMLResponse)
 def leaderboard(request: Request, dataset: str, all: int = 0):
     rows = _run_rows(dataset, all_history=bool(all))
-    attrs: list[str] = sorted({a for r in rows for a in r["metrics"]})
     audit = [dict(x) for x in _state()["conn"].execute(
         "SELECT * FROM label_audit WHERE dataset=? ORDER BY id DESC LIMIT 5",
         (dataset,))]
     return templates.TemplateResponse(request, "leaderboard.html", {
-        "dataset": dataset, "rows": rows, "attrs": attrs,
+        "dataset": dataset, "rows": rows,
         "all_history": bool(all), "audit": audit,
     })
 
