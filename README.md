@@ -15,8 +15,25 @@ lab 레포(`../plr-prompt-lab`)의 `lab submit` 클라이언트가 `attributes.j
 
 ```bash
 pip install -r requirements.txt
+
+export EVAL_SERVER_DATA=~/eval_server_data    # 데이터셋·run 파일 저장 볼륨
+export EVAL_SERVER_TOKEN=tutorial-token       # 변이 API(X-Auth-Token) 값 — 아무 문자열
+
 uvicorn server.app:app --host 0.0.0.0 --port 8890 --workers 1
 ```
+
+`--workers 1` **필수**(쓰기 잠금이 단일 프로세스 asyncio.Lock — 다중 워커 금지).
+토큰을 안 걸면 인증 없이 열립니다(로컬 전용).
+
+떴는지 확인:
+
+```bash
+curl -s http://127.0.0.1:8890/health     # {"ok":true,...}
+# 브라우저: http://127.0.0.1:8890/
+```
+
+> lab 클라이언트에서 이 서버로 데이터셋을 제출하는 워크플로는
+> lab 레포의 [`docs/TUTORIAL.md`](../plr-prompt-lab/docs/TUTORIAL.md).
 
 ### 환경 변수
 
