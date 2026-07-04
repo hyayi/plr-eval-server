@@ -43,6 +43,7 @@ _SURFACE_PY = ("plr_prompts.py", "plr_parse.py", "plr_core.py", "plr_schema.py",
 def surface_relpaths(
     lab_root: str | os.PathLike[str] | None = None,
     include_exp_configs: bool = False,
+    version: str | None = None,
 ) -> list[str]:
     """Relative paths of the existing prompt-surface files, deterministic order.
 
@@ -53,10 +54,19 @@ def surface_relpaths(
     configs) — used by prompt_hash so a knob change re-stamps provenance.
     ``lab port`` keeps the default False: experiment configs are lab-only
     and have no core/ir counterpart to diff against.
+
+    ``version`` scopes the prompt surface to a single version directory
+    (``prompts/<version>/**``) instead of every version. A run only uses one
+    prompt version, so its surface_hash / bundle should cover only that
+    version — otherwise editing an unused experimental version would perturb
+    this run's fingerprint. Default None = all versions (``lab port`` keeps
+    this: it diffs the whole prompt surface against core/ir).
     """
     root = Path(lab_root) if lab_root else _LAB_ROOT
     rels: list[str] = []
     prompts_dir = root / _PROMPTS_DIR
+    if version is not None:
+        prompts_dir = prompts_dir / version
     if prompts_dir.is_dir():
         rels.extend(sorted(str(p.relative_to(root)) for p in prompts_dir.rglob("*.yaml")))
     schema_dir = root / _SCHEMA_DIR
@@ -72,10 +82,12 @@ def surface_relpaths(
     return rels
 
 
-def _surface_paths(lab_root: str | os.PathLike[str] | None = None) -> list[Path]:
+def _surface_paths(lab_root: str | os.PathLike[str] | None = None,
+                   version: str | None = None) -> list[Path]:
     """Absolute paths of the hashed surface (prompts + experiment configs)."""
     root = Path(lab_root) if lab_root else _LAB_ROOT
-    return [root / rel for rel in surface_relpaths(root, include_exp_configs=True)]
+    return [root / rel for rel in
+            surface_relpaths(root, include_exp_configs=True, version=version)]
 
 
 def read_seed_hash(lab_root: str | os.PathLike[str] | None = None) -> str | None:
@@ -133,6 +145,7 @@ def warn_stale_seed(
 def prompt_hash(
     lab_root: str | os.PathLike[str] | None = None,
     length: int = 12,
+    version: str | None = None,
 ) -> str:
     """Return a short stable sha256 hash of the active prompt surface content.
 
@@ -151,7 +164,7 @@ def prompt_hash(
     """
     root = Path(lab_root) if lab_root else _LAB_ROOT
     h = hashlib.sha256()
-    for path in _surface_paths(root):
+    for path in _surface_paths(root, version=version):
         rel = str(path.relative_to(root))
         h.update(rel.encode("utf-8"))
         h.update(b"\0")

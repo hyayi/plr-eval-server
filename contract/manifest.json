@@ -2,6 +2,6 @@
   "note": "공유 계약 파일의 sha256 — 두 레포(lab/server)에서 byte-identical 이어야 함. gen_manifest.py 로 재생성, sync_contract.sh 로 서버에 전파.",
   "files": {
     "evalkit/dataset.py": "76bc85fec4195fe268b9872d1c3e28a44fef7001b35d61a37ab638ecd41bf4f0",
-    "evalkit/provenance.py": "129372cb6da57fa43bc639f6ce0b4f466553a6747ac49e80e7a9053f89971fa6"
+    "evalkit/provenance.py": "e3099d1ae2e11889d1951ea60cebf5e95769cdeb793b0614873690747cb3f45d"
   }
 }
