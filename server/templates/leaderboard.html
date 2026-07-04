@@ -10,8 +10,7 @@
 {% if not rows %}<div class="card">아직 run이 없습니다 — <code>lab submit</code> 또는 <a href="/upload">업로드</a>.</div>{% endif %}
 <table id="lb"><thead><tr>
 <th>선택</th><th>run</th><th>version</th><th>무결성</th>
-<th>macro F1</th><th>macro acc</th><th>micro acc</th>
-{% for a in attrs %}<th>{{ a }} acc</th><th>{{ a }} F1</th>{% endfor %}
+<th>macro F1</th><th>accuracy</th>
 <th>model</th><th>제출자</th><th>제출시각</th>
 </tr></thead><tbody>
 {% for r in rows %}
@@ -22,13 +21,7 @@
 <td>{% if not r.hash_verified %}<span class="badge warn" title="번들 해시가 run 시점 지문과 불일치 — 보관본이 실행 당시 상태가 아닐 수 있음">⚠ 미검증</span>{% else %}<span class="badge ok">✓</span>{% endif %}
     {% if r.git_dirty %}<span class="badge warn" title="커밋 안 된 수정으로 실행됨">dirty</span>{% endif %}</td>
 <td data-v="{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else -1 }}">{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else '—' }}</td>
-<td data-v="{{ r.aggregate.macro_acc if r.aggregate.macro_acc is not none else -1 }}">{{ r.aggregate.macro_acc if r.aggregate.macro_acc is not none else '—' }}</td>
 <td data-v="{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else -1 }}">{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else '—' }}</td>
-{% for a in attrs %}
-{% set m = r.metrics.get(a, {}) %}
-<td data-v="{{ m.get('accuracy', -1) }}">{{ m.get('accuracy', '—') }}</td>
-<td data-v="{{ m.get('macro_f1', -1) }}">{{ m.get('macro_f1', '—') }}</td>
-{% endfor %}
 <td>{{ r.model }}</td><td>{{ r.submitted_by }}</td><td>{{ r.submitted_at[:16] }}</td>
 </tr>
 {% endfor %}

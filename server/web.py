@@ -62,13 +62,37 @@ def leaderboard(request: Request, dataset: str, all: int = 0):
     })
 
 
+def _with_per_class_acc(metrics: dict[str, dict]) -> dict[str, dict]:
+    """attribute별 metrics(m)에 class별 accuracy를 얹는다 — confusion(행=정답,열=예측)
+    에서 one-vs-rest 정확도 (TP+TN)/N 로 유도. recall(행 정규화)과 구별되는 값이며,
+    새 채점 로직이 아니라 render 계층에서만 기존 confusion 을 재사용해 파생한다."""
+    for m in metrics.values():
+        confusion = m.get("confusion") or {}
+        n_total = sum(sum(row.values()) for row in confusion.values())
+        per_class_acc: dict[str, float | None] = {}
+        for c in m.get("classes", []):
+            if not n_total:
+                per_class_acc[c] = None
+                continue
+            tp = (confusion.get(c) or {}).get(c, 0)
+            row_total = sum((confusion.get(c) or {}).values())            # true==c
+            col_total = sum((confusion.get(t) or {}).get(c, 0) for t in confusion)  # pred==c
+            fn = row_total - tp
+            fp = col_total - tp
+            tn = n_total - tp - fp - fn
+            per_class_acc[c] = round((tp + tn) / n_total, 4)
+        m["per_class_acc"] = per_class_acc
+    return metrics
+
+
 @router.get("/r/{run_id}", response_class=HTMLResponse)
 def run_page(request: Request, run_id: str):
     from server.app import run_detail
     d = run_detail(run_id)
+    metrics = _with_per_class_acc(d["metrics"].get("attributes", {}))
     return templates.TemplateResponse(request, "run.html", {
         "run_id": run_id, "meta": d["meta"],
-        "metrics": d["metrics"].get("attributes", {}),
+        "metrics": metrics,
         "aggregate": d["metrics"].get("aggregate", {}),
         "skipped": d["metrics"].get("skipped", []),
         "surface_files": d["surface_files"], "prov": d.get("provenance"),

@@ -106,6 +106,63 @@ def test_structurally_broken_row_rejected(client):
     assert r.status_code == 422
 
 
+def test_run_page_links_report_and_gallery(client):
+    """S1/AC3: run 페이지에 report/gallery 링크가 있고, 그 라우트는 200;
+    존재하지 않는 run의 report.html은 404 유지."""
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("female", 0.8)}]
+    r = _submit(client, "v1", rows)
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+
+    page = client.get(f"/r/{run_id}")
+    assert page.status_code == 200
+    assert f"/api/runs/{run_id}/report.html" in page.text
+    assert f"/api/runs/{run_id}/gallery.html" in page.text
+
+    assert client.get(f"/api/runs/{run_id}/report.html").status_code == 200
+    assert client.get(f"/api/runs/{run_id}/gallery.html").status_code == 200
+    assert client.get("/api/runs/no-such-run/report.html").status_code == 404
+
+
+def test_leaderboard_slim_columns(client):
+    """S2/AC1: 리더보드는 macro F1 + accuracy 2개 지표 컬럼만; 속성별 컬럼 없음."""
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("female", 0.8)}]
+    r = _submit(client, "v1", rows)
+    assert r.status_code == 201, r.text
+
+    page = client.get("/d/http_ds")
+    assert page.status_code == 200
+    assert "macro F1" in page.text
+    assert "accuracy" in page.text
+    assert "gender acc" not in page.text
+    assert "gender F1" not in page.text
+
+
+def test_run_page_class_detail(client):
+    """S3/AC2: 라벨된 속성마다 체크박스 + class별(f1/precision/recall/acc) 표."""
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("female", 0.8)}]
+    r = _submit(client, "v1", rows)
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+
+    page = client.get(f"/r/{run_id}")
+    assert page.status_code == 200
+    text = page.text
+    # 속성 체크박스 (라벨된 속성 = gender 하나)
+    assert 'data-target="attr-detail-gender"' in text
+    assert 'type="checkbox"' in text
+    # class별 표: 열 헤더 + class(male/female) 행
+    assert "<th>f1</th>" in text
+    assert "<th>precision</th>" in text
+    assert "<th>recall</th>" in text
+    assert "<th>acc</th>" in text
+    assert "<td>male</td>" in text
+    assert "<td>female</td>" in text
+
+
 def test_dataset_push_structure_guard_rejects_missing_labels(tmp_path, monkeypatch):
     """데이터셋 push 구조 가드: labels.jsonl 이 없으면 422. 라벨 어휘(enum) 검증은
     클라이언트 `lab validate-dataset` 소관이라 서버는 재검증하지 않지만(plr_schema/

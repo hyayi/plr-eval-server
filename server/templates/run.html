@@ -15,6 +15,11 @@ surface_hash <code>{{ meta.surface_hash }}</code>
 {% if prov %} · lab_sha <code>{{ prov.lab_sha[:10] }}</code>{% endif %}
 </div>
 
+<div class="sub">
+<a href="/api/runs/{{ run_id }}/report.html" target="_blank">report.html 보기</a>
+ · <a href="/api/runs/{{ run_id }}/gallery.html" target="_blank">gallery.html 보기</a>
+</div>
+
 <h2>지표 (속성별)</h2>
 {% if skipped %}<div class="sub">라벨 없어 skip: {{ skipped | join(', ') }}</div>{% endif %}
 <table id="mx"><thead><tr><th>attribute</th><th>n</th><th>accuracy</th><th>macro F1</th>
@@ -28,13 +33,36 @@ surface_hash <code>{{ meta.surface_hash }}</code>
 {% endfor %}
 </tbody></table>
 
+<h2>속성별 class 상세</h2>
+<div class="card">
 {% for a, m in metrics.items() %}
-<h2>{{ a }} — confusion (행=정답)</h2>
+<label><input type="checkbox" class="attr-toggle" data-target="attr-detail-{{ a }}"
+ checked onchange="toggleAttr(this)"> {{ a }}</label>
+{% endfor %}
+</div>
+
+{% for a, m in metrics.items() %}
+<div id="attr-detail-{{ a }}">
+<h3>{{ a }} — class별 지표</h3>
+<table><thead><tr><th>class</th><th>f1</th><th>precision</th><th>recall</th><th>acc</th></tr></thead><tbody>
+{% for c in m.classes %}
+{% set f1v = m.f1.get(c) %}{% set pv = m.precision.get(c) %}
+{% set rv = m.recall.get(c) %}{% set av = m.per_class_acc.get(c) %}
+<tr><td>{{ c }}</td>
+<td data-v="{{ f1v if f1v is not none else -1 }}">{{ f1v if f1v is not none else '—' }}</td>
+<td data-v="{{ pv if pv is not none else -1 }}">{{ pv if pv is not none else '—' }}</td>
+<td data-v="{{ rv if rv is not none else -1 }}">{{ rv if rv is not none else '—' }}</td>
+<td data-v="{{ av if av is not none else -1 }}">{{ av if av is not none else '—' }}</td></tr>
+{% endfor %}
+</tbody></table>
+
+<h3>{{ a }} — confusion (행=정답)</h3>
 <table><thead><tr><th></th>{% for c in m.confusion.keys() %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>
 {% for t, row in m.confusion.items() %}
 <tr><th>{{ t }}</th>{% for c in m.confusion.keys() %}<td>{{ row.get(c, 0) }}</td>{% endfor %}</tr>
 {% endfor %}
 </tbody></table>
+</div>
 {% endfor %}
 
 <h2>표면 파일 (보관본 — 열람 전용)</h2>
@@ -44,4 +72,10 @@ surface_hash <code>{{ meta.surface_hash }}</code>
 {% endfor %}
 </div>
 {% endblock %}
-{% block script %}<script>sortable('mx')</script>{% endblock %}
+{% block script %}<script>
+sortable('mx');
+function toggleAttr(cb){
+  const el=document.getElementById(cb.dataset.target);
+  if(el) el.style.display = cb.checked ? '' : 'none';
+}
+</script>{% endblock %}
