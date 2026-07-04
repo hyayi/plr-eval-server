@@ -11,10 +11,10 @@
 <table id="lb"><thead><tr>
 <th>선택</th><th>run</th><th>version</th><th>무결성</th>
 <th>macro F1</th><th>accuracy</th>
-<th>model</th><th>제출자</th><th>제출시각</th>
+<th>model</th><th>제출자</th><th>제출시각</th><th>액션</th>
 </tr></thead><tbody>
 {% for r in rows %}
-<tr>
+<tr id="row-{{ r.run_id }}">
 <td><input type="checkbox" class="sel" value="{{ r.run_id }}"></td>
 <td><a href="/r/{{ r.run_id }}">{{ r.run_id }}</a></td>
 <td>{{ r.version_label }}</td>
@@ -23,6 +23,7 @@
 <td data-v="{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else -1 }}">{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else '—' }}</td>
 <td data-v="{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else -1 }}">{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else '—' }}</td>
 <td>{{ r.model }}</td><td>{{ r.submitted_by }}</td><td>{{ r.submitted_at[:16] }}</td>
+<td><button class="del" onclick="deleteRun('{{ r.run_id }}')">삭제</button></td>
 </tr>
 {% endfor %}
 </tbody></table>
@@ -43,5 +44,12 @@ function gotoDiff(){
   const sel=[...document.querySelectorAll('.sel:checked')].map(c=>c.value);
   if(sel.length!==2){alert('두 run을 선택하세요');return;}
   location.href='/diff?a='+sel[0]+'&b='+sel[1];
+}
+async function deleteRun(runId){
+  if(!confirm(runId+' 를 삭제할까요? 되돌릴 수 없습니다.')) return;
+  const token=prompt('X-Auth-Token')||'';
+  const r=await fetch('/api/runs/'+runId,{method:'DELETE',headers:{'X-Auth-Token':token}});
+  if(r.ok){ const row=document.getElementById('row-'+runId); if(row) row.remove(); }
+  else alert('삭제 실패: '+r.status+'\n'+await r.text());
 }
 </script>{% endblock %}

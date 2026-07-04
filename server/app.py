@@ -430,6 +430,21 @@ def run_detail(run_id: str) -> dict:
             "provenance": read_json(run_dir / "run_provenance.json")}
 
 
+@app.delete("/api/runs/{run_id}")
+async def delete_run(run_id: str) -> dict:
+    """run 삭제 — 디렉터리(runs/<id>) 제거 + DB의 runs·metrics 행 삭제.
+    디렉터리를 지우므로 기동 복구(reconcile_and_rebuild)가 되살리지 않는다
+    (파일 없음 → 리플레이할 것 없음)."""
+    root, conn = STATE["root"], STATE["conn"]
+    run_dir = root / "runs" / run_id
+    if not run_dir.is_dir():
+        raise HTTPException(404, f"run {run_id!r} not found")
+    async with dbm.WRITE_LOCK:
+        shutil.rmtree(run_dir)
+        dbm.delete_run(conn, run_id)
+    return {"deleted": run_id}
+
+
 # =====================================================================
 # Web UI (server/web.py) — API 정의 뒤에 include (web이 app.list_runs를 참조)
 # =====================================================================

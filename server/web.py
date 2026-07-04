@@ -110,27 +110,45 @@ def surface_file(run_id: str, path: str):
     return target.read_text(encoding="utf-8", errors="replace")
 
 
+def _diff_norm_key(rel: str) -> str:
+    """prompts/<version>/foo/bar.yaml 의 버전 세그먼트를 정규화 키에서 제거해
+    다른 버전 dir에 있는 동명 프롬프트가 하나의 diff 항목으로 정렬되게 한다.
+    non-prompt 파일(py/vocab/configs)은 상대경로 그대로 키가 된다."""
+    parts = rel.split("/")
+    if len(parts) >= 3 and parts[0] == "prompts":
+        return "/".join([parts[0]] + parts[2:])
+    return rel
+
+
 @router.get("/diff", response_class=HTMLResponse)
 def diff_page(request: Request, a: str, b: str):
     root = _state()["root"]
     from server.storage import read_json
 
-    def _files(run_id: str) -> dict[str, str]:
+    def _files(run_id: str) -> dict[str, tuple[str, str]]:
+        """{norm_key: (actual_relpath, content)} — 실제 경로는 diff 헤더 표시용."""
         base = root / "runs" / run_id / "surface"
         if not base.is_dir():
             raise HTTPException(404, f"run {run_id!r} has no surface")
-        return {str(p.relative_to(base)): p.read_text(encoding="utf-8", errors="replace")
-                for p in base.rglob("*") if p.is_file()}
+        out: dict[str, tuple[str, str]] = {}
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = str(p.relative_to(base))
+            out[_diff_norm_key(rel)] = (rel, p.read_text(encoding="utf-8", errors="replace"))
+        return out
 
     fa, fb = _files(a), _files(b)
     diffs = []
-    for rel in sorted(set(fa) | set(fb)):
-        la = fa.get(rel, "").splitlines(keepends=True)
-        lb = fb.get(rel, "").splitlines(keepends=True)
-        d = list(difflib.unified_diff(la, lb, fromfile=f"{a}/{rel}",
-                                      tofile=f"{b}/{rel}"))
+    for key in sorted(set(fa) | set(fb)):
+        rel_a, content_a = fa.get(key, (None, ""))
+        rel_b, content_b = fb.get(key, (None, ""))
+        la = content_a.splitlines(keepends=True)
+        lb = content_b.splitlines(keepends=True)
+        d = list(difflib.unified_diff(la, lb, fromfile=f"{a}/{rel_a or key}",
+                                      tofile=f"{b}/{rel_b or key}"))
         if d:
-            diffs.append({"path": rel, "diff": "".join(d)})
+            diffs.append({"path": key, "diff": "".join(d)})
     prov_a = read_json(root / "runs" / a / "run_provenance.json") or {}
     prov_b = read_json(root / "runs" / b / "run_provenance.json") or {}
     param_keys = sorted(set(prov_a) | set(prov_b))

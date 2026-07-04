@@ -123,6 +123,13 @@ def upsert_dataset(conn: sqlite3.Connection, name: str, created_at: str,
     conn.commit()
 
 
+def delete_run(conn: sqlite3.Connection, run_id: str) -> None:
+    """runs + metrics 행 삭제 (run 삭제 시 디렉터리 제거와 함께 호출)."""
+    conn.execute("DELETE FROM metrics WHERE run_id=?", (run_id,))
+    conn.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+    conn.commit()
+
+
 def add_label_audit(conn: sqlite3.Connection, dataset: str, changed_at: str,
                     changed_by: str, diff_summary: str, rescored_runs: list[str]) -> None:
     conn.execute(
