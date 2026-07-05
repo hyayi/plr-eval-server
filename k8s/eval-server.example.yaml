@@ -1,6 +1,8 @@
 # plr-eval-server — Kubernetes 배포 (Deployment + Service + PVC + Secret)
 #
-# ⚠ 이 파일은 .gitignore 대상 — 토큰(Secret)·환경별 값이 들어가므로 커밋 금지.
+# ⚠ 실제 배포본(k8s/eval-server.yaml)은 .gitignore 대상 — 토큰(Secret)·환경별 값이
+#   들어가므로 커밋 금지. 이 .example 을 복사해 편집:
+#     cp k8s/eval-server.example.yaml k8s/eval-server.yaml   # 토큰 등 채우기
 #
 # 전제: 이미지를 클러스터가 pull 가능한 곳에 둔다.
 #   docker build -t plr-eval-server:latest -f server/Dockerfile .
@@ -12,10 +14,10 @@
 #
 # 적용:  kubectl apply -f k8s/eval-server.yaml
 # 확인:  kubectl -n plr get pods,svc,pvc
-# 접속:  http://<노드IP>:30890   (NodePort)   ·   삭제: kubectl delete -f k8s/eval-server.yaml
+# 접속:  kubectl -n plr get svc plr-eval-server   # EXTERNAL-IP:8890 (LoadBalancer)
+# 삭제:  kubectl delete -f k8s/eval-server.yaml
 #
-# ⚠ 사내 LAN 전용 — 공인망 노출 금지(크롭 = 사적 CCTV). NodePort/LoadBalancer를
-#   내부 네트워크로만 한정하세요.
+# ⚠ 사내 LAN 전용 — 공인망 노출 금지(크롭 = 사적 CCTV). LoadBalancer는 내부망으로만.
 ---
 apiVersion: v1
 kind: Namespace
@@ -92,13 +94,6 @@ spec:
               port: 8890
             initialDelaySeconds: 15
             periodSeconds: 20
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              cpu: "1"
-              memory: "1Gi"
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -112,12 +107,11 @@ metadata:
   labels:
     app: plr-eval-server
 spec:
-  type: NodePort                        # 포트 노출: <노드IP>:<nodePort>.
-                                        # 내부 로드밸런서 있으면 type: LoadBalancer 로.
+  type: LoadBalancer                    # 포트 노출: EXTERNAL-IP:8890 (내부 LB가 IP 할당).
+                                        # 접속: kubectl -n plr get svc 로 EXTERNAL-IP 확인.
   selector:
     app: plr-eval-server
   ports:
     - name: http
-      port: 8890                        # 클러스터 내부 서비스 포트
+      port: 8890                        # 외부 노출 서비스 포트
       targetPort: 8890                  # 컨테이너 포트
-      nodePort: 30890                   # 외부 노출 포트(30000-32767) → http://<노드IP>:30890
