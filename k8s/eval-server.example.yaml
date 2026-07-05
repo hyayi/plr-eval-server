@@ -1,54 +1,39 @@
-# plr-eval-server — Kubernetes 배포 (Deployment + Service + PVC + Secret)
+# plr-eval-server — Kubernetes 배포 (Secret + Deployment + Service)
 #
 # ⚠ 실제 배포본(k8s/eval-server.yaml)은 .gitignore 대상 — 토큰(Secret)·환경별 값이
 #   들어가므로 커밋 금지. 이 .example 을 복사해 편집:
-#     cp k8s/eval-server.example.yaml k8s/eval-server.yaml   # 토큰 등 채우기
+#     cp k8s/eval-server.example.yaml k8s/eval-server.yaml   # 토큰·PVC 이름 채우기
 #
 # 전제: 이미지를 클러스터가 pull 가능한 곳에 둔다.
 #   docker build -t plr-eval-server:latest -f server/Dockerfile .
-#   # 그다음 아래 중 하나:
 #   #  - 사설 레지스트리:  docker tag ... <registry>/plr-eval-server:latest && docker push ...
 #   #  - kind:            kind load docker-image plr-eval-server:latest
 #   #  - minikube:        minikube image load plr-eval-server:latest
-#   #  (레지스트리를 쓰면 아래 image: 를 <registry>/... 로, imagePullPolicy: Always 로)
+#   #  (레지스트리 사용 시 아래 image: 를 <registry>/... 로, imagePullPolicy: Always 로)
 #
-# 적용:  kubectl apply -f k8s/eval-server.yaml
-# 확인:  kubectl -n plr get pods,svc,pvc
-# 접속:  kubectl -n plr get svc plr-eval-server   # EXTERNAL-IP:8890 (LoadBalancer)
-# 삭제:  kubectl delete -f k8s/eval-server.yaml
+# 저장소(PVC): 새로 만들지 않고 **기존 NFS PVC 재사용**(예: inseo301-nfs).
+#   → 아래 Deployment.volumes[].claimName 을 실제 PVC 이름으로 바꾸세요.
+#
+# 적용:  kubectl -n <계정네임스페이스> apply -f k8s/eval-server.yaml
+# 확인:  kubectl -n <계정> get pods,svc
+# 접속:  kubectl -n <계정> get svc plr-eval-server   # EXTERNAL-IP:8890 (LoadBalancer)
+# 삭제:  kubectl -n <계정> delete -f k8s/eval-server.yaml
 #
 # ⚠ 사내 LAN 전용 — 공인망 노출 금지(크롭 = 사적 CCTV). LoadBalancer는 내부망으로만.
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: plr
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: eval-server-secret
-  namespace: plr
+  # namespace 는 지정하지 않음 — kubectl apply -n <계정> 이 대상 네임스페이스를 결정.
 type: Opaque
 stringData:
   EVAL_SERVER_TOKEN: "CHANGE-ME"        # 변이 API(등록/제출/삭제) 토큰 — 실제 값으로
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: eval-server-data
-  namespace: plr
-spec:
-  accessModes: ["ReadWriteOnce"]        # 단일 writer(파드 1개)와 일치
-  resources:
-    requests:
-      storage: 20Gi                     # 데이터셋·run 파일 — 필요만큼 조정
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: plr-eval-server
-  namespace: plr
+  name: plr-eval-server-deployment
   labels:
     app: plr-eval-server
 spec:
@@ -64,6 +49,8 @@ spec:
       labels:
         app: plr-eval-server
     spec:
+      # nodeSelector:                    # 클러스터 규약에 맞게(선택). eval 서버는 GPU 불필요.
+      #   role: dev
       containers:
         - name: server
           image: plr-eval-server:latest
@@ -73,7 +60,7 @@ spec:
             - containerPort: 8890
           env:
             - name: EVAL_SERVER_DATA
-              value: /data
+              value: /data/plr-eval-server   # 공유 NFS 하위 전용 폴더 — 다른 용도와 충돌 방지
             - name: EVAL_SERVER_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -97,21 +84,20 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: eval-server-data
+            claimName: inseo301-nfs       # 기존 NFS PVC 재사용 — 새로 만들지 않음
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: plr-eval-server
-  namespace: plr
+  name: plr-eval-server-service
   labels:
     app: plr-eval-server
 spec:
   type: LoadBalancer                    # 포트 노출: EXTERNAL-IP:8890 (내부 LB가 IP 할당).
-                                        # 접속: kubectl -n plr get svc 로 EXTERNAL-IP 확인.
   selector:
     app: plr-eval-server
   ports:
     - name: http
+      protocol: TCP
       port: 8890                        # 외부 노출 서비스 포트
       targetPort: 8890                  # 컨테이너 포트
