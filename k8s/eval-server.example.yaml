@@ -67,13 +67,14 @@ spec:
               cd /srv/app
               # 3) 의존성 설치 (루트 requirements.txt 에 fastapi/uvicorn/pyyaml/pillow 등 전부)
               pip install --no-cache-dir -r requirements.txt
-              # 4) 서버 기동 — --workers 1 고정(쓰기 직렬화 단일 프로세스)
+              # 4) NFS 하위 데이터 폴더 보장 후 서버 기동 (--workers 1 고정)
+              mkdir -p "$EVAL_SERVER_DATA"
               exec uvicorn server.app:app --host 0.0.0.0 --port 8890 --workers 1
           ports:
             - containerPort: 8890
           env:
             - name: EVAL_SERVER_DATA
-              value: /data/plr-eval-server   # 공유 NFS 하위 전용 폴더 — 다른 용도와 충돌 방지
+              value: /data/perception/inseo/plr_server_data   # NFS 하위 전용 데이터 폴더
             - name: GIT_REF
               value: master                  # 배포할 브랜치/태그
             - name: EVAL_SERVER_TOKEN
@@ -109,7 +110,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: inseo301-nfs       # 기존 NFS PVC 재사용 — 새로 만들지 않음
+            claimName: inseo301-nfs-all   # 기존 NFS PVC 재사용 — 새로 만들지 않음
 ---
 apiVersion: v1
 kind: Service
