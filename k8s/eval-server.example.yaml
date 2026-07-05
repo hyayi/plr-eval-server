@@ -1,23 +1,21 @@
 # plr-eval-server — Kubernetes 배포 (Secret + Deployment + Service)
 #
-# ⚠ 실제 배포본(k8s/eval-server.yaml)은 .gitignore 대상 — 토큰(Secret)·환경별 값이
+# ⚠ 실제 배포본(k8s/eval-server.yaml)은 .gitignore 대상 — 토큰·clone URL 등 환경별 값이
 #   들어가므로 커밋 금지. 이 .example 을 복사해 편집:
-#     cp k8s/eval-server.example.yaml k8s/eval-server.yaml   # 토큰·PVC 이름 채우기
+#     cp k8s/eval-server.example.yaml k8s/eval-server.yaml
 #
-# 전제: 이미지를 클러스터가 pull 가능한 곳에 둔다.
-#   docker build -t plr-eval-server:latest -f server/Dockerfile .
-#   #  - 사설 레지스트리:  docker tag ... <registry>/plr-eval-server:latest && docker push ...
-#   #  - kind:            kind load docker-image plr-eval-server:latest
-#   #  - minikube:        minikube image load plr-eval-server:latest
-#   #  (레지스트리 사용 시 아래 image: 를 <registry>/... 로, imagePullPolicy: Always 로)
+# 방식: 커스텀 이미지를 레지스트리에 올리지 않고, **베이스 이미지(python:3.12-slim)에서
+#   pod 시작 시 git clone → pip install → uvicorn** 으로 부트스트랩한다(코드는 git에서).
+#   → 프라이빗 레포면 GIT_REPO_URL 에 토큰 포함:
+#        https://<PAT>@github.com/hyayi/plr-eval-server.git
+#      퍼블릭이면 토큰 없이:  https://github.com/hyayi/plr-eval-server.git
 #
-# 저장소(PVC): 새로 만들지 않고 **기존 NFS PVC 재사용**(예: inseo301-nfs).
-#   → 아래 Deployment.volumes[].claimName 을 실제 PVC 이름으로 바꾸세요.
+# 저장소(PVC): 새로 만들지 않고 **기존 NFS PVC 재사용**(claimName 을 실제 이름으로).
+#   코드는 컨테이너 임시 FS(/srv/app)에, 데이터만 NFS(/data/plr-eval-server)에 둔다.
 #
 # 적용:  kubectl -n <계정네임스페이스> apply -f k8s/eval-server.yaml
-# 확인:  kubectl -n <계정> get pods,svc
-# 접속:  kubectl -n <계정> get svc plr-eval-server   # EXTERNAL-IP:8890 (LoadBalancer)
-# 삭제:  kubectl -n <계정> delete -f k8s/eval-server.yaml
+# 확인:  kubectl -n <계정> get pods,svc   ·   kubectl -n <계정> logs deploy/plr-eval-server-deployment
+# 접속:  kubectl -n <계정> get svc plr-eval-server-service   # EXTERNAL-IP:8890 (LoadBalancer)
 #
 # ⚠ 사내 LAN 전용 — 공인망 노출 금지(크롭 = 사적 CCTV). LoadBalancer는 내부망으로만.
 ---
@@ -25,10 +23,11 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: eval-server-secret
-  # namespace 는 지정하지 않음 — kubectl apply -n <계정> 이 대상 네임스페이스를 결정.
 type: Opaque
 stringData:
   EVAL_SERVER_TOKEN: "CHANGE-ME"        # 변이 API(등록/제출/삭제) 토큰 — 실제 값으로
+  # 프라이빗 레포면 <PAT> 포함, 퍼블릭이면 토큰 빼기
+  GIT_REPO_URL: "https://<PAT>@github.com/hyayi/plr-eval-server.git"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -53,33 +52,59 @@ spec:
       #   role: dev
       containers:
         - name: server
-          image: plr-eval-server:latest
-          imagePullPolicy: IfNotPresent  # 레지스트리 사용 시 Always
-          # 이미지 CMD가 이미 `uvicorn ... --workers 1` 고정 (단일 워커 필수)
+          image: python:3.12-slim        # 베이스 이미지 — 커스텀 이미지 불필요
+          workingDir: /srv
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              # 1) git 설치 (slim 베이스엔 없음)
+              apt-get update && apt-get install -y --no-install-recommends git
+              # 2) 서버 코드 clone (GIT_REF 기본 master). 코드는 임시 FS에.
+              rm -rf /srv/app
+              git clone --depth 1 --branch "${GIT_REF:-master}" "$GIT_REPO_URL" /srv/app
+              cd /srv/app
+              # 3) 의존성 설치 (루트 requirements.txt 에 fastapi/uvicorn/pyyaml/pillow 등 전부)
+              pip install --no-cache-dir -r requirements.txt
+              # 4) 서버 기동 — --workers 1 고정(쓰기 직렬화 단일 프로세스)
+              exec uvicorn server.app:app --host 0.0.0.0 --port 8890 --workers 1
           ports:
             - containerPort: 8890
           env:
             - name: EVAL_SERVER_DATA
               value: /data/plr-eval-server   # 공유 NFS 하위 전용 폴더 — 다른 용도와 충돌 방지
+            - name: GIT_REF
+              value: master                  # 배포할 브랜치/태그
             - name: EVAL_SERVER_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: eval-server-secret
                   key: EVAL_SERVER_TOKEN
+            - name: GIT_REPO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eval-server-secret
+                  key: GIT_REPO_URL
           volumeMounts:
             - name: data
               mountPath: /data
+          # clone+pip 로 기동이 느리므로 startupProbe 로 최대 ~5분 대기(그동안 liveness 미적용)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8890
+            periodSeconds: 10
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health
               port: 8890
-            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8890
-            initialDelaySeconds: 15
             periodSeconds: 20
       volumes:
         - name: data
