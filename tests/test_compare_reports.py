@@ -645,3 +645,143 @@ def test_reconcile_function_direct(tmp_path):
     assert job["status"] == "failed"
     # 재실행은 멱등 — 이미 failed 인 job 은 건드리지 않음
     assert reconcile_compare_jobs(root) == []
+
+
+# =====================================================================
+# TASK-007 — iter_jobs 스캔 헬퍼 + GET /api/compare-reports 전체 목록 API
+# =====================================================================
+
+def test_iter_jobs_scan_rules_direct(tmp_path):
+    """iter_jobs 필터 규칙 4가지 단위 검증 (SRV-010) — 비-디렉터리 제외,
+    _agents 제외, job.json 부재 skip, 손상은 (name, None) 그대로 전달.
+    compare_reports/ 부재 시 빈 리스트."""
+    from server.compare import iter_jobs
+
+    root = tmp_path / "data"
+    assert iter_jobs(root) == []                     # compare_reports/ 부재
+    base = root / "compare_reports"
+    base.mkdir(parents=True)
+    (base / "_agents").mkdir()                       # 서버 관리 사본 — 제외
+    (base / "stray.txt").write_text("x", encoding="utf-8")   # 비-디렉터리 — 제외
+    (base / "cli-leftover").mkdir()                  # job.json 부재 — skip
+    good = "r20260101-000000-abcdef__r20260101-000001-abcdef"
+    (base / good).mkdir()
+    (base / good / "job.json").write_text(json.dumps({"status": "done"}),
+                                          encoding="utf-8")
+    corrupt = "r20260101-000002-abcdef__r20260101-000003-abcdef"
+    (base / corrupt).mkdir()
+    (base / corrupt / "job.json").write_text('{"status": "d', encoding="utf-8")
+
+    assert iter_jobs(root) == [(good, {"status": "done"}), (corrupt, None)]
+
+
+def test_list_route_resolution_with_existing_routes(make_client):
+    """라우트 해석 (api-contract caveat — 검토 유의사항 (a)): 신규 GET 목록이
+    기존 POST 동일 경로·GET {pair}·GET /api/runs/{run_id} 동결 키와 실등록
+    라우터에서 공존한다 (INT-002)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+
+        # 신규 GET 목록 — job 0건이어도 200 빈 목록
+        r = c.get("/api/compare-reports")
+        assert r.status_code == 200 and r.json() == []
+
+        # 기존 POST(동일 경로·메서드 상이) 그대로 동작 — 202 생성
+        assert c.post("/api/compare-reports", json={"a": a, "b": b},
+                      headers=TOKEN).status_code == 202
+        _wait_status(c, pair, {"done"})
+
+        # 신규 GET 목록에 pair·run 쌍·status·dataset·시각 3종 반환 (USER-REQ-006)
+        listed = c.get("/api/compare-reports").json()
+        assert [j["pair"] for j in listed] == [pair]
+        assert listed[0]["run_a"] == a and listed[0]["run_b"] == b
+        assert listed[0]["status"] == "done"
+        assert listed[0]["dataset"] == "http_ds"
+        for key in ("created_at", "started_at", "finished_at"):
+            assert listed[0][key], key
+
+        # 기존 GET {pair} 상태 조회 유지
+        assert c.get(f"/api/compare-reports/{pair}").status_code == 200
+        # 기존 GET /api/runs/{run_id} 동결 키 유지 (INT-002)
+        d = c.get(f"/api/runs/{a}", headers=TOKEN)
+        assert d.status_code == 200
+        assert set(d.json()) == {"meta", "metrics", "surface_files", "provenance"}
+
+
+def test_list_excludes_agents_and_non_job_dirs(make_client, tmp_path):
+    """_agents·job.json 없는 디렉터리·잡파일이 목록에 나타나지 않는다 (SRV-010)."""
+    base = tmp_path / "data" / "compare_reports"
+    base.mkdir(parents=True)
+    (base / "cli-leftover").mkdir()                  # job.json 없는 잔재 디렉터리
+    (base / "notes.txt").write_text("x", encoding="utf-8")
+    a, b = "r20260101-000000-abcdef", "r20260101-000001-abcdef"
+    _plant_job(tmp_path / "data", a, b, "done")
+    with make_client(_OK_BODY) as c:                 # 기동이 _agents/ 사본 설치
+        assert (base / "_agents").is_dir()           # _agents 실존 상태에서 검증
+        listed = c.get("/api/compare-reports").json()
+        assert [j["pair"] for j in listed] == [f"{a}__{b}"]
+
+
+def test_list_corrupt_job_consistent_with_status_api(make_client, tmp_path):
+    """손상 job.json 은 목록에서 숨기지 않고 reconcile 의 failed 재작성과 동일
+    표현으로 표기 — reconcile 후 개별 상태 API 응답과 일치 (SRV-010)."""
+    pair = "r20260101-000000-abcdef__r20260101-000001-abcdef"
+    with make_client(_OK_BODY) as c:
+        # 기동(reconcile) 후 손상 발생 시나리오 — 목록은 즉석 표기로 노출
+        d = tmp_path / "data" / "compare_reports" / pair
+        d.mkdir(parents=True)
+        (d / "job.json").write_text('{"status": "runn', encoding="utf-8")
+        entry = next(j for j in c.get("/api/compare-reports").json()
+                     if j["pair"] == pair)
+        assert entry["status"] == "failed"
+        assert "손상" in entry["error"]
+        assert entry["run_a"] == "r20260101-000000-abcdef"   # 디렉터리 이름 복원
+        assert entry["run_b"] == "r20260101-000001-abcdef"
+
+        # reconcile 이 같은 표현으로 재작성 → 개별 상태 API 와 일치
+        from server.compare import reconcile_compare_jobs
+        assert reconcile_compare_jobs(tmp_path / "data") == [pair]
+        status = c.get(f"/api/compare-reports/{pair}")
+        assert status.status_code == 200
+        status_job = status.json()
+        assert set(status_job) == set(entry) - {"pair"}
+        for key in set(status_job) - {"finished_at"}:        # finished_at 은 _now()
+            assert status_job[key] == entry[key], key
+
+
+def test_list_sorted_created_at_desc_null_last(make_client, tmp_path):
+    """목록은 created_at 역순, null created_at(손상-재작성 표현)은 맨 뒤."""
+    base = tmp_path / "data" / "compare_reports"
+    old = "r20260101-000000-abcdef__r20260101-000001-abcdef"
+    new = "r20260101-000002-abcdef__r20260101-000003-abcdef"
+    corrupt = "r20260101-000004-abcdef__r20260101-000005-abcdef"
+    for name, created in ((old, "2026-01-01T00:00:00"), (new, "2026-03-01T00:00:00")):
+        d = base / name
+        d.mkdir(parents=True)
+        (d / "job.json").write_text(json.dumps({
+            "run_a": name.split("__")[0], "run_b": name.split("__")[1],
+            "dataset": "d", "status": "done", "created_at": created,
+            "started_at": created, "finished_at": created,
+            "error": None, "stderr_tail": None}), encoding="utf-8")
+    (base / corrupt).mkdir(parents=True)
+    (base / corrupt / "job.json").write_text('{"x', encoding="utf-8")
+
+    with make_client(_OK_BODY) as c:   # 기동 reconcile 이 corrupt → failed(null)
+        listed = c.get("/api/compare-reports").json()
+        assert [j["pair"] for j in listed] == [new, old, corrupt]
+        assert listed[-1]["created_at"] is None
+
+
+def test_list_token_exempt_but_post_guarded(make_client, tmp_path):
+    """EVAL_SERVER_TOKEN 설정 상태에서 토큰 없는 GET 목록은 200 (token_guard
+    GET/HEAD 면제 — 기존 인증 계약과 일관), POST 는 여전히 401."""
+    a, b = "r20260101-000000-abcdef", "r20260101-000001-abcdef"
+    _plant_job(tmp_path / "data", a, b, "done")
+    with make_client(_OK_BODY) as c:   # fixture 가 EVAL_SERVER_TOKEN=sekrit 설정
+        r = c.get("/api/compare-reports")            # 토큰 없이
+        assert r.status_code == 200
+        assert r.json()[0]["pair"] == f"{a}__{b}"
+        assert c.post("/api/compare-reports",
+                      json={"a": a, "b": b}).status_code == 401  # 토큰 없는 변이

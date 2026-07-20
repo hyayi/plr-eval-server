@@ -185,41 +185,69 @@ def _install_agents_copy(claude_src: Path, root: Path) -> Path:
     return agents_root
 
 
-def reconcile_compare_jobs(root: Path) -> list[str]:
-    """기동 reconcile (SRV-004 (b)) — reconcile_and_rebuild 패턴을 따른다.
+def iter_jobs(root: Path) -> list[tuple[str, dict | None]]:
+    """compare_reports/ job 스캔의 단일 원천 (SRV-010) — reconcile 과 목록 API
+    (및 후속 UI 소비자)가 공유한다. 규칙을 복제하지 말고 이 함수를 쓸 것.
 
-    compare_reports/*/job.json 을 스캔해 (1) orphan queued/running(실행 주체가
-    죽은 재시작 잔재) → failed, (2) 파싱 불가(부분 쓰기 손상) job.json →
-    failed 로 정리한다. 정리한 pair 이름 목록 반환."""
+    필터 규칙 4가지:
+      1. 비-디렉터리(잡파일 등) 제외.
+      2. ``_agents`` 디렉터리 제외 — 서버 관리 에이전트 사본으로 항상 존재하며
+         CLI 실행 잔재 디렉터리가 실측된다(job 아님).
+      3. ``job.json`` 없는 디렉터리 skip (job 이 아닌 잔재).
+      4. 손상(파싱 불가) job.json 은 숨기지 않고 ``(name, None)`` 으로 그대로
+         전달 — failed 재작성/표기 등 해석은 소비자 몫.
+
+    compare_reports/ 부재 시 빈 리스트. 반환은 디렉터리 이름 오름차순이며
+    job 당 파일 읽기는 job.json 1회뿐이다 (SRV-011 상한).
+    """
     base = root / "compare_reports"
-    fixed: list[str] = []
+    jobs: list[tuple[str, dict | None]] = []
     if not base.is_dir():
-        return fixed
+        return jobs
     for d in sorted(base.iterdir()):
         if not d.is_dir() or d.name == "_agents":
             continue
-        jf = d / "job.json"
-        if not jf.is_file():
+        if not (d / "job.json").is_file():
             continue
-        job = _read_job(d)
+        jobs.append((d.name, _read_job(d)))
+    return jobs
+
+
+def _corrupt_job_repr(pair: str) -> dict:
+    """손상(파싱 불가) job.json 의 표준 표현 — reconcile 이 기동 시 failed 로
+    재작성하는 dict 와 목록 API 의 즉석 표기가 이 한 곳을 공유한다 (SRV-010:
+    개별 상태 조회와 목록의 일관성). 디렉터리 이름에서 run id 복원을 시도한다."""
+    parts = pair.split("__")
+    run_a, run_b = (parts + [None, None])[:2] if len(parts) == 2 else (None, None)
+    return {
+        "run_a": run_a, "run_b": run_b, "dataset": None,
+        "status": "failed", "created_at": None, "started_at": None,
+        "finished_at": _now(),
+        "error": "job.json 손상(비원자적 쓰기 잔재) — 기동 시 failed 처리",
+        "stderr_tail": None,
+    }
+
+
+def reconcile_compare_jobs(root: Path) -> list[str]:
+    """기동 reconcile (SRV-004 (b)) — reconcile_and_rebuild 패턴을 따른다.
+
+    compare_reports/*/job.json 을 iter_jobs 로 스캔해 (1) orphan queued/running
+    (실행 주체가 죽은 재시작 잔재) → failed, (2) 파싱 불가(부분 쓰기 손상)
+    job.json → failed 로 정리한다. 정리한 pair 이름 목록 반환."""
+    base = root / "compare_reports"
+    fixed: list[str] = []
+    for name, job in iter_jobs(root):
+        d = base / name
         if job is None:
-            # 손상 job.json — 디렉터리 이름에서 run id 복원 시도 후 failed 기록
-            parts = d.name.split("__")
-            run_a, run_b = (parts + [None, None])[:2] if len(parts) == 2 else (None, None)
-            _write_job(d, {
-                "run_a": run_a, "run_b": run_b, "dataset": None,
-                "status": "failed", "created_at": None, "started_at": None,
-                "finished_at": _now(),
-                "error": "job.json 손상(비원자적 쓰기 잔재) — 기동 시 failed 처리",
-                "stderr_tail": None,
-            })
-            fixed.append(d.name)
+            # 손상 job.json — 표준 표현(failed)으로 재작성 (목록 API 와 공유)
+            _write_job(d, _corrupt_job_repr(name))
+            fixed.append(name)
         elif job.get("status") in ("queued", "running"):
             job["status"] = "failed"
             job["error"] = "서버 재시작으로 중단"
             job["finished_at"] = _now()
             _write_job(d, job)
-            fixed.append(d.name)
+            fixed.append(name)
     return fixed
 
 
@@ -439,6 +467,27 @@ async def create_compare_report(req: CompareRequest, force: int = 0):
     _STATE["tasks"].add(task)
     task.add_done_callback(_STATE["tasks"].discard)
     return JSONResponse(job, status_code=202)
+
+
+@router.get("/api/compare-reports")
+def list_compare_reports() -> list[dict]:
+    """전체 job 목록 (USER-REQ-006 API 절반) — created_at 역순, null 은 맨 뒤.
+
+    - iter_jobs 공유 (SRV-010): _agents·비-job 디렉터리 미노출, 스캔 규칙 복제 없음.
+      job 당 파일 읽기는 job.json 1회뿐 (SRV-011 흡수 — md 존재 확인·workspace
+      나열 금지, 완료 여부는 status 필드로 충분).
+    - 손상 job(None)은 숨기지 않고 reconcile 의 failed 재작성과 동일 표현
+      (_corrupt_job_repr)으로 표기 — 개별 상태 API 와 일관.
+    - 503 게이트 없음: 기능 비활성 서버에서도 기존 job 조회는 가능해야 하며
+      GET {pair} 에 게이트가 없는 것과 일관. GET 이므로 token_guard 자동 면제.
+    - 경로는 기존 POST(동일 경로·메서드 상이)·GET {pair}({pair} 는 빈 세그먼트
+      불매치)와 충돌하지 않는다 — 라우트 해석 테스트로 실증 (INT-002 caveat).
+    """
+    items = [{"pair": pair, **(job if job is not None else _corrupt_job_repr(pair))}
+             for pair, job in iter_jobs(_STATE["root"])]
+    # created_at 역순 — None 은 "" 로 치환되어 역순 정렬에서 맨 뒤에 온다
+    items.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+    return items
 
 
 @router.get("/api/compare-reports/{pair}")
