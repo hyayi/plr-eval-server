@@ -11,6 +11,7 @@
 <table id="lb"><thead><tr>
 <th>선택</th><th>run</th><th>version</th><th>무결성</th>
 <th>macro F1</th><th>accuracy</th>
+<th>macro precision</th><th>macro recall</th>
 <th>model</th><th>제출자</th><th>제출시각</th><th>액션</th>
 </tr></thead><tbody>
 {% for r in rows %}
@@ -22,6 +23,10 @@
     {% if r.git_dirty %}<span class="badge warn" title="커밋 안 된 수정으로 실행됨">dirty</span>{% endif %}</td>
 <td data-v="{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else -1 }}">{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else '—' }}</td>
 <td data-v="{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else -1 }}">{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else '—' }}</td>
+{# macro P/R(REQ-001): 기존 macro F1 셀 패턴 복제 — 단 구형 run은 키 자체가
+   없을 수 있어 .get()으로 접근(없으면 '—', data-v=-1 보장) #}
+<td data-v="{{ r.aggregate.get('macro_precision') if r.aggregate.get('macro_precision') is not none else -1 }}">{{ r.aggregate.get('macro_precision') if r.aggregate.get('macro_precision') is not none else '—' }}</td>
+<td data-v="{{ r.aggregate.get('macro_recall') if r.aggregate.get('macro_recall') is not none else -1 }}">{{ r.aggregate.get('macro_recall') if r.aggregate.get('macro_recall') is not none else '—' }}</td>
 <td>{{ r.model }}</td><td>{{ r.submitted_by }}</td><td>{{ r.submitted_at[:16] }}</td>
 <td><button class="del" onclick="deleteRun('{{ r.run_id }}')">삭제</button></td>
 </tr>

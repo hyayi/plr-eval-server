@@ -126,7 +126,8 @@ def test_run_page_links_report_and_gallery(client):
 
 
 def test_leaderboard_slim_columns(client):
-    """S2/AC1: 리더보드는 macro F1 + accuracy 2개 지표 컬럼만; 속성별 컬럼 없음."""
+    """S2/AC1 + REQ-001: 리더보드는 집계 컬럼 4개(macro F1/accuracy/
+    macro precision/macro recall)만; 속성별 컬럼 없음."""
     rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
             {"obj_id": "b", "plr_json": _person("female", 0.8)}]
     r = _submit(client, "v1", rows)
@@ -136,8 +137,102 @@ def test_leaderboard_slim_columns(client):
     assert page.status_code == 200
     assert "macro F1" in page.text
     assert "accuracy" in page.text
+    assert "macro precision" in page.text
+    assert "macro recall" in page.text
     assert "gender acc" not in page.text
     assert "gender F1" not in page.text
+
+
+def test_aggregate_macro_pr_derivation():
+    """TASK-002: macro P/R 파생이 evalkit macro_f1 관례와 동일 —
+    gt_classes(=recall 키 집합) 기준, 결측 클래스 0.0, round 4, 속성 단순 평균.
+    aggregate()(채점 시점)와 derive_macro_pr(폴백 공유 헬퍼) 양 경로 단언."""
+    from server.aggregate import aggregate, derive_macro_pr
+
+    metrics = {
+        # gt_classes = [female, male] (recall 키 집합). precision의 female 결측 → 0.0.
+        # macro_recall = (0.5+1.0)/2 = 0.75, macro_precision = (0.0+0.5)/2 = 0.25
+        "gender": {
+            "classes": ["female", "male", "unknown"],
+            "recall": {"female": 0.5, "male": 1.0},
+            "precision": {"male": 0.5, "unknown": 0.9},  # unknown은 gt 아님 → 제외
+            "macro_f1": 0.6, "accuracy": 0.75, "n": 4, "correct": 3,
+        },
+        # 완전 일치 속성 — macro_recall = macro_precision = 1.0
+        "hat": {
+            "classes": ["no", "yes"],
+            "recall": {"no": 1.0, "yes": 1.0},
+            "precision": {"no": 1.0, "yes": 1.0},
+            "macro_f1": 1.0, "accuracy": 1.0, "n": 2, "correct": 2,
+        },
+    }
+    d = derive_macro_pr(metrics)
+    assert d["macro_recall"] == 0.875      # (0.75 + 1.0) / 2
+    assert d["macro_precision"] == 0.625   # (0.25 + 1.0) / 2
+
+    agg = aggregate(metrics)
+    assert agg["macro_recall"] == 0.875
+    assert agg["macro_precision"] == 0.625
+    # 기존 키 유지 + 값 불변 (additive 변경만)
+    assert agg["macro_f1"] == 0.8
+    assert agg["macro_acc"] == 0.875
+    assert agg["micro_acc"] == round(5 / 6, 4)
+    assert agg["n_total"] == 6
+
+    # 파생 재료 없음(recall 빈 dict) → None (리더보드 '—')
+    empty = derive_macro_pr({"g": {"recall": {}, "precision": {}}})
+    assert empty == {"macro_precision": None, "macro_recall": None}
+
+
+def test_leaderboard_macro_pr_fallback_for_legacy_run(client, tmp_path):
+    """TASK-002: aggregate에 macro P/R 키가 없는 구형 metrics.json도
+    리더보드가 attributes에서 읽기 시점 파생해 값을 표시(재채점 없음)."""
+    # 정답 a=male, b=female / 예측 둘 다 male →
+    # recall {female:0.0, male:1.0}, precision {male:0.5} (female 예측 없음)
+    # macro_recall = 0.5, macro_precision = (0.0+0.5)/2 = 0.25
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("male", 0.8)}]
+    r = _submit(client, "v1", rows)
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+
+    # 구형 run 시뮬레이션: 채점 시점 파일에서 신규 키 제거
+    mpath = tmp_path / "data" / "runs" / run_id / "metrics.json"
+    mj = json.loads(mpath.read_text(encoding="utf-8"))
+    for k in ("macro_precision", "macro_recall"):
+        mj["aggregate"].pop(k, None)
+    mpath.write_text(json.dumps(mj, ensure_ascii=False), encoding="utf-8")
+
+    page = client.get("/d/http_ds")
+    assert page.status_code == 200
+    assert 'data-v="0.25"' in page.text   # macro precision (파생)
+    assert 'data-v="0.5"' in page.text    # macro recall (파생)
+    assert 'data-v="-1"' not in page.text  # 파생 성공 — '—'(data-v=-1) 셀 없음
+
+
+def test_run_detail_top_level_keys_frozen(client):
+    """INT-002 회귀 가드: GET /api/runs/{id} 최상위 키 집합 불변 —
+    REQ-001 신규 키는 metrics.aggregate 내부에만 나타난다. submit 응답의
+    기존 키도 유지(additive 변경만)."""
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("female", 0.8)}]
+    r = _submit(client, "v1", rows)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    # submit 응답: 기존 키 유지 + aggregate 내부에 신규 키 additive
+    assert {"run_id", "hash_verified", "git_dirty", "aggregate",
+            "attributes", "skipped"} <= set(body)
+    assert "macro_precision" in body["aggregate"]
+    assert "macro_recall" in body["aggregate"]
+
+    d = client.get(f"/api/runs/{body['run_id']}", headers=TOKEN)
+    assert d.status_code == 200
+    detail = d.json()
+    assert set(detail) == {"meta", "metrics", "surface_files", "provenance"}
+    agg = detail["metrics"]["aggregate"]
+    for k in ("macro_f1", "macro_acc", "micro_acc", "n_total"):
+        assert k in agg, f"기존 aggregate 키 누락: {k}"
+    assert "macro_precision" in agg and "macro_recall" in agg
 
 
 def test_run_page_class_detail(client):

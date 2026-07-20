@@ -50,8 +50,12 @@ function sortable(tableId){
     rows.sort((r1,r2)=>{
       const a=r1.cells[i].dataset.v??r1.cells[i].textContent.trim();
       const b=r2.cells[i].dataset.v??r2.cells[i].textContent.trim();
-      const na=parseFloat(a),nb=parseFloat(b);
-      const cmp=(!isNaN(na)&&!isNaN(nb))?na-nb:String(a).localeCompare(String(b));
+      // 숫자 판정은 전체 문자열 기준(Number) — parseFloat는 선행 숫자만 읽어
+      // ISO 날짜("2026-07-14T09:31")가 2026으로 축소, 같은 연도 행이 전부 동점이
+      // 되는 정렬 무동작 버그가 있었다(SRV-001). Number('')===0 함정 → 빈 문자열 가드.
+      // ISO 날짜·혼합 문자열은 NaN → localeCompare(사전순=시간순)로 정렬된다.
+      const bothNum=a!==''&&b!==''&&!isNaN(Number(a))&&!isNaN(Number(b));
+      const cmp=bothNum?Number(a)-Number(b):String(a).localeCompare(String(b));
       return asc?cmp:-cmp;
     });
     rows.forEach(r=>t.tBodies[0].appendChild(r));

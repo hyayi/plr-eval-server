@@ -26,6 +26,7 @@ def _state():
 
 
 def _run_rows(dataset: str, all_history: bool) -> list[dict]:
+    from server.aggregate import derive_macro_pr
     from server.app import list_runs
     from server.storage import read_json
 
@@ -33,7 +34,14 @@ def _run_rows(dataset: str, all_history: bool) -> list[dict]:
     root = _state()["root"]
     for r in rows:
         mj = read_json(root / "runs" / r["run_id"] / "metrics.json") or {}
-        r["aggregate"] = mj.get("aggregate", {})
+        agg = mj.get("aggregate", {})
+        # 구형 run 폴백(REQ-001): 채점 시점에 고정된 metrics.json aggregate에
+        # macro_precision 키가 없으면 이미 읽은 mj["attributes"]에서 읽기 시점
+        # 파생 — 추가 파일 IO 0 (run당 metrics.json 읽기 1회 유지, SRV-006 제약).
+        # 파생 재료(attributes)가 없으면 키 없이 두어 '—' 표시.
+        if "macro_precision" not in agg and mj.get("attributes"):
+            agg = {**agg, **derive_macro_pr(mj["attributes"])}
+        r["aggregate"] = agg
     return rows
 
 
