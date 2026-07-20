@@ -8,6 +8,15 @@
   — 컬럼 클릭으로 정렬 · 두 run 선택 후 <button onclick="gotoDiff()">비교(diff)</button>
   <button onclick="createReport(this)">보고서 생성</button>
 </div>
+{% if active_jobs %}
+{# REQ-005(TASK-008): 이 dataset 의 진행 중(queued/running) 보고서 안내 —
+   0건이면 블록 자체가 미출력되어 기존 레이아웃 회귀 없음. 손상 job 은
+   reconcile 표현상 failed 라 진행 중 대상이 아니다 (run id 매치로 포착돼도
+   _active_compare_jobs 가 상태 필터에서 제외 — web.py 주석 참조). #}
+<div class="card" id="active-jobs">생성 중인 비교 보고서 {{ active_jobs|length }}건 —
+  {% for j in active_jobs %}<a href="/compare/{{ j.pair }}">{{ j.pair }}</a><span class="badge warn">{{ j.status }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+  · <a href="/compare/">전체 목록</a></div>
+{% endif %}
 {% if not rows %}<div class="card">아직 run이 없습니다 — <code>lab submit</code> 또는 <a href="/upload">업로드</a>.</div>{% endif %}
 <table id="lb"><thead><tr>
 <th>선택</th><th>run</th><th>version</th><th>무결성</th>

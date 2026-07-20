@@ -86,6 +86,37 @@ def index(request: Request):
                                       {"datasets": datasets, "counts": counts})
 
 
+def _active_compare_jobs(dataset: str) -> list[dict]:
+    """리더보드 진행 중(queued/running) compare job 안내 데이터 (USER-REQ-005).
+
+    - 스캔은 TASK-007 iter_jobs 단일 원천을 재사용한다 (SRV-010 — 규칙 복제 없음).
+    - 데이터셋 사전 필터: 리더보드 표시 rows 는 버전명당 최신 run 만일 수 있어
+      매치 기준으로 부적합 — 해당 dataset 의 **전체 이력** run id 집합을 DB 에서
+      직접 확보(list_runs(all_history=True) 와 동등, metrics 조인 없는 경량 조회)한
+      뒤 pair 디렉터리명을 '__' 로 갈라 run id 매치로 무관 dataset job 을 배제한다.
+    - SRV-011 흡수 근거: iter_jobs 는 job 당 job.json 1회만 읽으며 여기서 md 확인
+      등 추가 파일 읽기를 하지 않는다. 이름-필터를 파일 읽기 전 단계로 내리는
+      최적화는 현 규모(전 job 수십 건 이하)에서 불요 — 규모 초과 시 SRV-011
+      backlog(인덱스/캐시)와 함께 검토.
+    - 손상(None) job 은 reconcile 표현상 failed 라 진행 중 대상이 아님 — 제외.
+    """
+    from server.compare import iter_jobs
+
+    run_ids = {r["run_id"] for r in _state()["conn"].execute(
+        "SELECT run_id FROM runs WHERE dataset=?", (dataset,))}
+    active = []
+    for pair, job in iter_jobs(_state()["root"]):
+        if job is None or job.get("status") not in ("queued", "running"):
+            continue
+        if not any(rid in run_ids for rid in pair.split("__")):
+            continue
+        active.append({"pair": pair, **job})
+    # 정렬은 created_at 역순만 — finished_at 은 손상 job 에서 호출마다 변동하는
+    # 값이라 정렬 키·안정 식별자로 쓰지 않는다 (final-verdict OBS-2).
+    active.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+    return active
+
+
 @router.get("/d/{dataset}", response_class=HTMLResponse)
 def leaderboard(request: Request, dataset: str, all: int = 0):
     rows = _run_rows(dataset, all_history=bool(all))
@@ -95,6 +126,7 @@ def leaderboard(request: Request, dataset: str, all: int = 0):
     return templates.TemplateResponse(request, "leaderboard.html", {
         "dataset": dataset, "rows": rows,
         "all_history": bool(all), "audit": audit,
+        "active_jobs": _active_compare_jobs(dataset),
     })
 
 
@@ -216,6 +248,27 @@ def upload_page(request: Request):
 # compare-runs 보고서 열람 (REQ-002 / TASK-005) — /compare/* prefix 전용
 # (INT-002: 기존 client 소비 URL·/api/runs/ 하위와 무교차)
 # =====================================================================
+
+@router.get("/compare/", response_class=HTMLResponse)
+def compare_list(request: Request):
+    """전체 compare job 목록 페이지 (USER-REQ-006 페이지 절반, TASK-008).
+
+    - literal 라우트 — /compare/{pair}({pair}=[^/]+ 는 빈 세그먼트 불매치)보다
+      위에 등록해 명시성 확보(순서 무관하나 의도 고정). /compare (슬래시 없음)는
+      FastAPI redirect_slashes 가 307 로 이곳에 도달시킨다 — 라우트 해석 테스트로
+      실증 (INT-002 caveat).
+    - 데이터는 TASK-007 iter_jobs + _corrupt_job_repr 재사용 — 목록 API
+      (GET /api/compare-reports)와 동일 표현·동일 정렬(created_at 역순, null 맨 뒤).
+      손상 job 의 finished_at 은 호출마다 변동(OBS-2) — 표시만 하고 정렬 키로
+      쓰지 않는다. 자동 폴링 없음(수동 새로고침 — non_goal).
+    """
+    from server.compare import _corrupt_job_repr, iter_jobs
+
+    jobs = [{"pair": pair, **(job if job is not None else _corrupt_job_repr(pair))}
+            for pair, job in iter_jobs(_state()["root"])]
+    jobs.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+    return templates.TemplateResponse(request, "compare_list.html", {"jobs": jobs})
+
 
 @router.get("/compare/{pair}", response_class=HTMLResponse)
 def compare_page(request: Request, pair: str):

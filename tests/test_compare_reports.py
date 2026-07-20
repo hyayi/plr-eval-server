@@ -785,3 +785,135 @@ def test_list_token_exempt_but_post_guarded(make_client, tmp_path):
         assert r.json()[0]["pair"] == f"{a}__{b}"
         assert c.post("/api/compare-reports",
                       json={"a": a, "b": b}).status_code == 401  # 토큰 없는 변이
+
+
+# =====================================================================
+# TASK-008 — /compare/ 목록 페이지 + 리더보드 진행 중 안내줄 (REQ-005/006)
+# =====================================================================
+
+def test_compare_list_route_resolution(make_client, tmp_path):
+    """라우트 해석 (AC4 — api-contract caveat): GET /compare/ 200 목록,
+    기존 GET /compare/{pair}·/compare/{pair}/{name} 계약 유지,
+    GET /compare(슬래시 없음) → 307 → /compare/ 도달,
+    GET /api/runs/{run_id} 동결 키 유지 (INT-002)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+
+        # 신규 목록 페이지 — job 0건이어도 200 + 빈 안내
+        r = c.get("/compare/")
+        assert r.status_code == 200
+        assert "생성된 비교 보고서가 없습니다" in r.text
+
+        # 기존 /compare/{pair}·{name} 계약 그대로 (상호 배타 — 빈 세그먼트 불매치)
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        assert c.get(f"/compare/{pair}").status_code == 200
+        assert c.get(f"/compare/{pair}/00_run_summary").status_code == 200
+        assert c.get(f"/compare/{pair}/04_extra").status_code == 404
+        assert c.get("/compare/evil__x").status_code == 404
+
+        # /compare → redirect_slashes 307 → /compare/ (AC4)
+        r = c.get("/compare", follow_redirects=False)
+        assert r.status_code == 307
+        assert r.headers["location"].endswith("/compare/")
+        r = c.get("/compare")                        # follow → 목록 도달
+        assert r.status_code == 200 and f"/compare/{pair}" in r.text
+
+        # INT-002: run 상세 동결 키 유지
+        d = c.get(f"/api/runs/{a}", headers=TOKEN)
+        assert d.status_code == 200
+        assert set(d.json()) == {"meta", "metrics", "surface_files", "provenance"}
+
+
+def test_compare_list_page_distinguishes_statuses(make_client, tmp_path):
+    """/compare/ 목록: done/failed/queued 구분 표기 + 상태 페이지·run 링크 +
+    _agents·비-job 디렉터리 미노출 + 손상 job(None) 렌더 안전.
+    OBS-2: finished_at 정확값은 단언하지 않는다 (손상 job 은 호출마다 변동)."""
+    root = tmp_path / "data"
+    ids = [f"r20260101-00000{i}-abcdef" for i in range(6)]
+    _plant_job(root, ids[0], ids[1], "done", reports=_FULL_REPORTS)
+    _plant_job(root, ids[2], ids[3], "failed", error="boom")
+    base = root / "compare_reports"
+    (base / "cli-leftover").mkdir()                  # job.json 부재 — 미노출
+    with make_client(_OK_BODY) as c:                 # 기동이 _agents/ 사본 설치
+        assert (base / "_agents").is_dir()
+        # queued 는 기동 reconcile 이후에 심는다 — 기동 전 잔재 queued 는
+        # reconcile 이 orphan failed 로 정리하기 때문(정상 설계 동작)
+        _plant_job(root, ids[4], ids[5], "queued")
+        # 기동 reconcile 이후 손상 발생 시나리오 — None 브랜치('—' 가드) 렌더 검증
+        broken = base / "broken-name"                # '__' 분해 불가 → run id 복원 실패
+        broken.mkdir()
+        (broken / "job.json").write_text('{"status": "d', encoding="utf-8")
+
+        page = c.get("/compare/")
+        assert page.status_code == 200
+        # 상태 구분 표기 (done=ok / failed·진행 중=warn 상이 문구)
+        assert '<span class="badge ok">done</span>' in page.text
+        assert '<span class="badge warn">failed</span>' in page.text
+        assert "진행 중 · queued" in page.text
+        # 상태 페이지·run 상세 링크
+        for i in (0, 2, 4):
+            assert f'href="/compare/{ids[i]}__{ids[i + 1]}"' in page.text
+        assert f'href="/r/{ids[0]}"' in page.text
+        assert "http_ds" in page.text                # dataset 컬럼
+        # 손상 job: failed 표기 + run 링크 자리는 '—' (crash 없이 렌더)
+        assert "broken-name" in page.text
+        # 스캔 필터 (SRV-010): _agents·비-job 디렉터리 미노출
+        assert "_agents" not in page.text
+        assert "cli-leftover" not in page.text
+
+
+def test_leaderboard_active_jobs_notice_present_and_absent(make_client, tmp_path):
+    """REQ-005: 해당 dataset 의 queued/running job 이 있을 때만 안내줄 출력
+    (상태 페이지 링크 + /compare/ 목록 링크). 0건이면 마커 자체 부재 —
+    레이아웃 회귀 없음. 매치는 전체 이력 run id 기준(표시 rows 는 버전명당
+    최신만이라 부적합 — checklist 지시)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        # 같은 버전을 두 번 제출 — 기본 리더보드에는 최신만 표시된다
+        a_old, _a_new = _submit(c, "v1"), _submit(c, "v1")
+        b_old, _b_new = _submit(c, "v2"), _submit(c, "v2")
+
+        page = c.get("/d/http_ds")
+        assert 'id="active-jobs"' not in page.text   # job 0건 — 마커 부재
+
+        # 표시되지 않는(구버전) run 쌍의 queued job — 전체 이력 기준이라 포착돼야 함
+        _plant_job(tmp_path / "data", a_old, b_old, "queued")
+        page = c.get("/d/http_ds")
+        assert 'id="active-jobs"' in page.text
+        assert "생성 중인 비교 보고서" in page.text
+        assert f'href="/compare/{a_old}__{b_old}"' in page.text   # 상태 페이지 링크
+        assert 'href="/compare/"' in page.text                    # 전체 목록 링크
+
+        # done 전이 → 안내줄 소멸 (queued/running 만 대상)
+        _plant_job(tmp_path / "data", a_old, b_old, "done", reports=_FULL_REPORTS)
+        page = c.get("/d/http_ds")
+        assert 'id="active-jobs"' not in page.text
+        # failed 도 진행 중 아님 — 마커 부재 유지
+        _plant_job(tmp_path / "data", a_old, b_old, "failed", error="x")
+        page = c.get("/d/http_ds")
+        assert 'id="active-jobs"' not in page.text
+        # 기존 리더보드 요소 회귀 없음
+        assert "보고서 생성" in page.text and "비교(diff)" in page.text
+
+
+def test_leaderboard_notice_excludes_other_dataset_jobs(make_client, tmp_path):
+    """다른 dataset 의 진행 중 job 은 안내줄에 미노출 — run id 사전 필터
+    (SRV-011 흡수 제약: 배지 경로도 job 당 job.json 1회 초과 읽기 없음)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c, "http_ds")
+        _register_dataset(c, "other_ds")
+        _submit(c, "v1", dataset="http_ds")
+        oa = _submit(c, "o1", dataset="other_ds")
+        ob = _submit(c, "o2", dataset="other_ds")
+        _plant_job(tmp_path / "data", oa, ob, "running")
+
+        page = c.get("/d/http_ds")                   # 무관 dataset — 미노출
+        assert 'id="active-jobs"' not in page.text
+        assert f"{oa}__{ob}" not in page.text
+
+        page = c.get("/d/other_ds")                  # 해당 dataset — 노출
+        assert 'id="active-jobs"' in page.text
+        assert f'href="/compare/{oa}__{ob}"' in page.text
+        assert "running" in page.text
