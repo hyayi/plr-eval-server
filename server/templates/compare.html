@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{% if report_name %}{{ report_name }} — {{ a }} vs {{ b }}{% else %}비교 보고서 {{ a }} vs {{ b }}{% endif %}{% endblock %}
+{% block body %}
+{% if report_name %}
+<h1>{{ report_name }}.md</h1>
+<div class="sub"><a href="/compare/{{ a }}__{{ b }}">← 보고서 목록</a> ·
+  <a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a></div>
+{# 에이전트 산출 md 는 신뢰 불가 업로드 텍스트에서 파생 — autoescape <pre>
+   텍스트로만 렌더 (SRV-005 XSS 차단). |safe / raw HTML 삽입 금지. #}
+<pre>{{ report_content }}</pre>
+{% else %}
+<h1>AI 비교 보고서</h1>
+<div class="sub"><a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a>
+  · <a href="/diff?a={{ a }}&b={{ b }}">기계적 diff</a></div>
+
+{% if not job %}
+<div class="card">아직 생성된 보고서가 없습니다.
+  <button onclick="createReport(0)">보고서 생성</button></div>
+{% elif job.status in ('queued', 'running') %}
+<div class="card">상태: <span class="badge warn">{{ job.status }}</span> — 생성 중입니다 (5초마다 자동 갱신).
+  <div class="sub" style="margin:6px 0 0">요청 {{ job.created_at }}{% if job.started_at %} · 시작 {{ job.started_at }}{% endif %}</div>
+</div>
+{% elif job.status == 'failed' %}
+<div class="card">상태: <span class="badge warn">failed</span> — {{ job.error }}
+  <div style="margin-top:8px"><button onclick="createReport(0)">다시 생성</button></div>
+</div>
+{% if job.stderr_tail %}<h2>stderr (마지막 4KB)</h2><pre>{{ job.stderr_tail }}</pre>{% endif %}
+{% elif job.status == 'done' %}
+<div class="card">상태: <span class="badge ok">done</span> · 완료 {{ job.finished_at }}
+  <button onclick="createReport(1)">다시 생성(덮어쓰기)</button></div>
+<h2>보고서</h2>
+<ul>
+{% for n in report_names %}<li><a href="/compare/{{ a }}__{{ b }}/{{ n }}">{{ n }}.md</a></li>
+{% endfor %}</ul>
+{% else %}
+<div class="card">상태: {{ job.status }}</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+{% block script %}{% if not report_name %}<script>
+async function createReport(force){
+  const token=prompt('X-Auth-Token')||'';
+  const r=await fetch('/api/compare-reports'+(force?'?force=1':''),{method:'POST',
+    headers:{'Content-Type':'application/json','X-Auth-Token':token},
+    body:JSON.stringify({a:'{{ a }}',b:'{{ b }}'})});
+  if(r.ok) location.reload();
+  else if(r.status===503) alert('이 서버에서는 보고서 생성이 비활성화되어 있습니다.\n'+await r.text());
+  else alert('보고서 생성 실패: '+r.status+'\n'+await r.text());
+}
+{% if job and job.status in ('queued', 'running') %}
+// 상태 폴링 — 상태가 바뀌면 새로고침 (queued→running→done/failed)
+setInterval(async()=>{
+  const r=await fetch('/api/compare-reports/{{ a }}__{{ b }}');
+  if(r.ok){const j=await r.json(); if(j.status!=='{{ job.status }}') location.reload();}
+},5000);
+{% endif %}
+</script>{% endif %}{% endblock %}

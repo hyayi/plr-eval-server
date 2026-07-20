@@ -196,15 +196,67 @@ def diff_page(request: Request, a: str, b: str):
     prov_a = read_json(dir_a / "run_provenance.json") or {}
     prov_b = read_json(dir_b / "run_provenance.json") or {}
     param_keys = sorted(set(prov_a) | set(prov_b))
+    # REQ-002(TASK-005): 보고서 페이지 링크용 상태만 조회 — 기계적 diff 출력
+    # 로직은 무수정 (있으면 링크에 상태 표시, 없으면 링크만).
+    from server.compare import job_dir_of
+    report_job = read_json(job_dir_of(_state()["root"], a, b) / "job.json") or {}
     return templates.TemplateResponse(request, "diff.html", {
         "a": a, "b": b, "diffs": diffs,
         "params": [(k, prov_a.get(k), prov_b.get(k)) for k in param_keys],
+        "report_status": report_job.get("status"),
     })
 
 
 @router.get("/upload", response_class=HTMLResponse)
 def upload_page(request: Request):
     return templates.TemplateResponse(request, "upload.html", {})
+
+
+# =====================================================================
+# compare-runs 보고서 열람 (REQ-002 / TASK-005) — /compare/* prefix 전용
+# (INT-002: 기존 client 소비 URL·/api/runs/ 하위와 무교차)
+# =====================================================================
+
+@router.get("/compare/{pair}", response_class=HTMLResponse)
+def compare_page(request: Request, pair: str):
+    """job 상태 페이지 — queued/running 폴링, failed 오류 표시, done 보고서 링크.
+    job 이 없어도 200 (생성 버튼 표시) — run id 는 TASK-003 헬퍼로 검증."""
+    from server.compare import REPORT_NAMES, job_dir_of, split_pair
+    from server.storage import read_json
+
+    a, b = split_pair(pair)
+    require_valid_run_id(a)
+    require_valid_run_id(b)
+    job = read_json(job_dir_of(_state()["root"], a, b) / "job.json")
+    return templates.TemplateResponse(request, "compare.html", {
+        "a": a, "b": b, "job": job if isinstance(job, dict) else None,
+        "report_names": REPORT_NAMES,
+        "report_name": None, "report_content": None,
+    })
+
+
+@router.get("/compare/{pair}/{name}", response_class=HTMLResponse)
+def compare_report_view(request: Request, pair: str, name: str):
+    """보고서 md 열람 — name 은 고정 화이트리스트(그 외 404).
+
+    에이전트 산출 md 는 신뢰 불가 업로드 표면 텍스트에서 파생된 내용이라
+    raw HTML 렌더 시 스크립트 주입이 가능하다 (SRV-005) — Jinja2 autoescape
+    를 통과하는 <pre> 텍스트로만 서빙한다 (|safe·markdown 렌더 금지)."""
+    from server.compare import REPORT_NAMES, job_dir_of, split_pair
+
+    a, b = split_pair(pair)
+    require_valid_run_id(a)
+    require_valid_run_id(b)
+    if name not in REPORT_NAMES:
+        raise HTTPException(404, f"no such report {name!r}")
+    path = job_dir_of(_state()["root"], a, b) / f"{name}.md"
+    if not path.is_file():
+        raise HTTPException(404, f"no such report {name!r}")
+    return templates.TemplateResponse(request, "compare.html", {
+        "a": a, "b": b, "job": None, "report_names": REPORT_NAMES,
+        "report_name": name,
+        "report_content": path.read_text(encoding="utf-8", errors="replace"),
+    })
 
 
 # =====================================================================

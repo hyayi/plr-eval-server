@@ -2,7 +2,8 @@
 {% block title %}diff {{ a }} vs {{ b }}{% endblock %}
 {% block body %}
 <h1>표면 비교</h1>
-<div class="sub"><a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a></div>
+<div class="sub"><a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a>
+  · <a href="/compare/{{ a }}__{{ b }}">AI 비교 보고서{% if report_status %} ({{ report_status }}){% endif %}</a></div>
 
 <h2>실행 파라미터 (run_provenance)</h2>
 <table><thead><tr><th>param</th><th>{{ a }}</th><th>{{ b }}</th></tr></thead><tbody>

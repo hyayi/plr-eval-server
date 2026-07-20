@@ -464,6 +464,169 @@ def test_reconcile_marks_orphan_and_corrupt_jobs_failed(make_client, tmp_path):
         assert j["status"] == "done"                 # 완료 job 불변
 
 
+# =====================================================================
+# TASK-005 — UI: /compare/* 상태 페이지·이스케이프 열람, 리더보드/diff 접점
+# =====================================================================
+
+def _plant_job(root: Path, a: str, b: str, status: str, *,
+               error: str | None = None, stderr_tail: str | None = None,
+               reports: dict[str, str] | None = None) -> Path:
+    """데이터 볼륨에 job 을 직접 심는다 — 영속 상태에서의 열람 경로 검증."""
+    d = root / "compare_reports" / f"{a}__{b}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "job.json").write_text(json.dumps({
+        "run_a": a, "run_b": b, "dataset": "http_ds", "status": status,
+        "created_at": "2026-07-20T00:00:00", "started_at": "2026-07-20T00:00:01",
+        "finished_at": "2026-07-20T00:10:00" if status in ("done", "failed") else None,
+        "error": error, "stderr_tail": stderr_tail,
+    }, ensure_ascii=False), encoding="utf-8")
+    for name, content in (reports or {}).items():
+        (d / f"{name}.md").write_text(content, encoding="utf-8")
+    return d
+
+
+_FULL_REPORTS = {n: f"# {n} fixture\n" for n in (
+    "00_run_summary", "01_metric_diff", "02_prompt_diff", "03_analysis_result")}
+
+
+def test_compare_page_done_lists_reports(make_client, tmp_path):
+    """done 상태: 200 + 00~03 보고서 링크 4종 + 재생성 버튼."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        page = c.get(f"/compare/{a}__{b}")
+        assert page.status_code == 200
+        for n in _FULL_REPORTS:
+            assert f"/compare/{a}__{b}/{n}" in page.text
+        assert "done" in page.text
+        assert "다시 생성" in page.text
+
+
+def test_compare_page_failed_shows_error(make_client, tmp_path):
+    """failed 상태: error·stderr_tail 표시 + 다시 생성 버튼 (재시도 경로)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        _plant_job(tmp_path / "data", a, b, "failed",
+                   error="claude 비정상 종료 (exit code 3)",
+                   stderr_tail="fixture stderr: boom")
+        page = c.get(f"/compare/{a}__{b}")
+        assert page.status_code == 200
+        assert "claude 비정상 종료 (exit code 3)" in page.text
+        assert "fixture stderr: boom" in page.text
+        assert "다시 생성" in page.text
+
+
+def test_compare_page_polls_while_running(make_client, tmp_path):
+    """queued/running 상태: 폴링 스크립트(setInterval + 상태 API URL) 포함."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        _plant_job(tmp_path / "data", a, b, "running")
+        page = c.get(f"/compare/{a}__{b}")
+        assert page.status_code == 200
+        assert "생성 중" in page.text
+        assert "setInterval" in page.text
+        assert f"/api/compare-reports/{a}__{b}" in page.text
+
+
+def test_compare_page_without_job_offers_create(make_client, tmp_path):
+    """job 미존재: 200 + 생성 버튼 (직접 URL 진입 경로)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        page = c.get(f"/compare/{a}__{b}")
+        assert page.status_code == 200
+        assert "아직 생성된 보고서가 없습니다" in page.text
+        assert "보고서 생성" in page.text
+
+
+def test_report_view_escapes_malicious_md(make_client, tmp_path):
+    """SRV-005: <script> 포함 md 가 이스케이프(&lt;script&gt;)되어 문자 그대로
+    표시되고 실행 가능한 태그로 삽입되지 않는다."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        evil = dict(_FULL_REPORTS)
+        evil["00_run_summary"] = ("# 요약\n<script>alert(1)</script>\n"
+                                  '<img src=x onerror="alert(2)">\n')
+        _plant_job(tmp_path / "data", a, b, "done", reports=evil)
+        page = c.get(f"/compare/{a}__{b}/00_run_summary")
+        assert page.status_code == 200
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page.text
+        assert "<script>alert(1)</script>" not in page.text
+        assert "<img src=x" not in page.text
+        # 정상 md 열람도 확인
+        assert c.get(f"/compare/{a}__{b}/03_analysis_result").status_code == 200
+
+
+def test_report_view_name_whitelist(make_client, tmp_path):
+    """name 은 00~03 고정 화이트리스트 — 그 외·미존재 파일은 404."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        d = _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        (d / "job.json.bak").write_text("secret", encoding="utf-8")
+        for bad in ("job", "job.json", "00_run_summary.md", "04_extra",
+                    "..%2Fjob", "env-dump"):
+            r = c.get(f"/compare/{a}__{b}/{bad}")
+            assert r.status_code == 404, bad
+            assert "secret" not in r.text
+        # 화이트리스트 이름이라도 파일이 없으면 404
+        (d / "01_metric_diff.md").unlink()
+        assert c.get(f"/compare/{a}__{b}/01_metric_diff").status_code == 404
+
+
+def test_compare_pages_reject_invalid_pair(make_client):
+    """pair 형식 불일치·비실존 run → 404 (TASK-003 헬퍼 + split_pair)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a = _submit(c, "v1")
+        for bad in ("evil__x", f"{a}", "..__..", f"{a}__{a}__x",
+                    f"{a}__r20200101-000000-abcdef"):  # 마지막: 형식 합격·비실존
+            assert c.get(f"/compare/{bad}").status_code == 404, bad
+            assert c.get(f"/compare/{bad}/00_run_summary").status_code == 404, bad
+
+
+def test_leaderboard_has_report_button(make_client):
+    """리더보드: 두 run 선택 → 보고서 생성 버튼 + API 호출 스크립트 존재."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        _submit(c, "v1")
+        page = c.get("/d/http_ds")
+        assert page.status_code == 200
+        assert "보고서 생성" in page.text
+        assert "/api/compare-reports" in page.text
+        assert "비교(diff)" in page.text     # 기존 diff 버튼 유지
+
+
+def test_diff_page_links_report_with_status(make_client, tmp_path):
+    """/diff 상단에 보고서 링크(있으면 상태 표시) — 기계적 diff 출력은 무수정
+    (기존 diff 상세 회귀는 test_server_diff_and_delete.py 가 커버)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        page = c.get(f"/diff?a={a}&b={b}")
+        assert page.status_code == 200
+        assert f"/compare/{a}__{b}" in page.text     # job 없어도 링크는 존재
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        page = c.get(f"/diff?a={a}&b={b}")
+        assert "(done)" in page.text                  # 상태 표시
+
+
+def test_compare_view_works_when_generation_disabled(make_client, tmp_path):
+    """비활성 서버(503)에서도 영속된 보고서 열람은 정상 — 생성만 막힌다."""
+    with make_client(agents_src=False) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        assert c.get(f"/compare/{a}__{b}").status_code == 200
+        assert c.get(f"/compare/{a}__{b}/00_run_summary").status_code == 200
+        r = c.post("/api/compare-reports", json={"a": a, "b": b}, headers=TOKEN)
+        assert r.status_code == 503
+
+
 def test_reconcile_function_direct(tmp_path):
     """reconcile 함수 직접 호출 (checklist verification) — 앱 기동 없이 단위 검증."""
     from server.compare import reconcile_compare_jobs
