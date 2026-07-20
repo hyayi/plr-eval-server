@@ -61,6 +61,40 @@ function sortable(tableId){
     rows.forEach(r=>t.tBodies[0].appendChild(r));
   }));
 }
+// 변이(POST/DELETE) fetch 공용 헬퍼 (SRV-008·SRV-009, USER-REQ-004/007).
+// - btn 이 주어지면 요청 동안 비활성 + '요청 중…' 표기 (중복 클릭 방지).
+// - fetch 자체가 reject(서버 다운·연결 거부)되면 원인 alert 후 버튼 복원, null 반환
+//   — 완전 무반응 금지.
+// - 토큰은 지연 질의: 먼저 헤더 없이 시도하고, 401(방어적으로 403 포함)일 때만
+//   prompt 1회 → X-Auth-Token 붙여 재시도. 재차 401/403 이면 오류 alert 로 종결
+//   (재질문 1회 캡 — 서버는 401 단일 발급, 토큰 미설정 서버는 prompt 자체가 없음).
+// - 그 외 응답(2xx/503/4xx/5xx)은 그대로 반환해 호출부가 기존 분기를 수행.
+//   비-ok 반환 전엔 버튼을 복원하고, ok(이동/reload/행 제거 예정)면 복원 생략.
+// fetch/prompt/alert 는 전역 주입 — node 테스트가 목킹으로 전 경로를 검증한다.
+async function mutateFetch(btn,url,opts){
+  opts=opts||{};
+  const label=btn?btn.textContent:null;
+  if(btn){btn.disabled=true;btn.textContent='요청 중…';}
+  const restore=()=>{if(btn){btn.disabled=false;btn.textContent=label;}};
+  const attempt=async(headers)=>{
+    try{ return await fetch(url,Object.assign({},opts,{headers:headers})); }
+    catch(e){ alert('서버에 연결할 수 없습니다: '+e); return null; }
+  };
+  let r=await attempt(opts.headers||{});
+  if(r===null){restore();return null;}
+  if(r.status===401||r.status===403){
+    const token=prompt('X-Auth-Token');
+    if(token===null){restore();return null;}          // 취소 — 조용히 종료
+    r=await attempt(Object.assign({},opts.headers||{},{'X-Auth-Token':token}));
+    if(r===null){restore();return null;}
+    if(r.status===401||r.status===403){
+      alert('토큰이 올바르지 않습니다 ('+r.status+')');
+      restore();return null;                          // 재질문 1회 캡 — 종결
+    }
+  }
+  if(!r.ok) restore();
+  return r;
+}
 </script>
 {% block script %}{% endblock %}
 </body></html>
