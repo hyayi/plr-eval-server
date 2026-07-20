@@ -41,6 +41,29 @@ curl -s http://127.0.0.1:8890/health     # {"ok":true,...}
 |---|---|---|
 | `EVAL_SERVER_DATA` | `./server_data` | 데이터셋·run 파일이 저장될 볼륨 경로 |
 | `EVAL_SERVER_TOKEN` | (없음 → 인증 없음) | 변이 API(POST/PATCH)의 `X-Auth-Token` 값 |
+| `COMPARE_AGENTS_SRC` | (없음 → compare 비활성) | compare-runs 에이전트 정의 원본 체크아웃 경로 (`.claude/` 포함) |
+| `CLAUDE_BIN` | `claude` | compare-runs 실행에 쓸 claude CLI |
+| `COMPARE_TIMEOUT_SEC` | `1800` | compare-runs job 실행 상한(초) — 초과 시 kill→failed |
+| `COMPARE_PYTHONPATH` | (이 레포 루트) | 에이전트 프로세스의 `PYTHONPATH` (evalkit import 용) |
+
+### compare-runs 보고서 (선택 기능)
+
+리더보드에서 두 run 을 골라 AI 비교 보고서(00~03.md)를 생성하는 기능
+(`POST /api/compare-reports`, 열람 `/compare/<a>__<b>`). **claude CLI +
+모델 자격증명(예: `ANTHROPIC_API_KEY`) + `COMPARE_AGENTS_SRC`** 가 모두 있어야
+활성화되며, 하나라도 없으면(k8s 기본 배포) POST 가 503 + 안내를 반환하고
+서버의 다른 기능은 정상 동작한다.
+
+- 상태·산출물은 `<EVAL_SERVER_DATA>/compare_reports/<a>__<b>/` 에 영속
+  (job.json + 보고서 4종) — 재시작 시 실행 중이던 job 은 failed 로 정리된다.
+- 에이전트 정의는 원본을 수정하지 않고 기동 시
+  `<EVAL_SERVER_DATA>/compare_reports/_agents/` 에 **tools 를 최소로 축소한
+  서버 관리 사본**으로 설치해 실행한다. 실행은 셸 미경유 exec + 검증된 run id
+  인자 + 최소 env 화이트리스트(서버 토큰 미전달).
+- 격리 권고: 에이전트 프로세스에는 DATA_ROOT 읽기 전용 + `compare_reports/` 만
+  쓰기 가능한 구성을 권장. `EVAL_SERVER_TOKEN` 미설정 시 LAN 내 누구나 생성
+  (모델 API 비용)을 트리거할 수 있으므로 토큰 설정을 권장한다.
+  상세는 `k8s/eval-server.example.yaml` 주석 참조.
 
 ### Docker
 

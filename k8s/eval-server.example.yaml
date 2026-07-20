@@ -75,6 +75,30 @@ spec:
           env:
             - name: EVAL_SERVER_DATA
               value: /data/perception/inseo/plr_server_data   # NFS 하위 전용 데이터 폴더
+            # ── compare-reports (REQ-002) — 선택 기능 ────────────────────────
+            # 이 기본 배포(python:3.12-slim, claude CLI 미설치)에서는 자동 비활성:
+            # POST /api/compare-reports 가 503 + 안내를 반환하고 다른 기능은 정상.
+            # 활성화하려면 컨테이너에 다음이 모두 필요하다:
+            #   1) claude CLI (Node.js + `npm i -g @anthropic-ai/claude-code`)
+            #      + 모델 자격증명 env (예: ANTHROPIC_API_KEY — Secret 으로 주입)
+            #   2) COMPARE_AGENTS_SRC — compare-runs 에이전트 정의 원본
+            #      (plr-eval-server-master 체크아웃 경로; 서버가 기동 시
+            #      <EVAL_SERVER_DATA>/compare_reports/_agents/ 에 tools 축소
+            #      사본을 설치해 실행한다. 원본은 읽기 전용)
+            #   3) COMPARE_PYTHONPATH — evalkit 위치(이 레포 루트, 기본값은
+            #      서버 자신의 레포 루트라 보통 생략 가능)
+            # 격리 권고(SRV-005): 에이전트 프로세스가 임의 명령 실행 벡터가 되지
+            # 않도록 DATA_ROOT 는 읽기 전용 마운트 + compare_reports/ 만 쓰기
+            # 가능하게 구성하고, EVAL_SERVER_TOKEN 을 반드시 설정할 것 —
+            # 미설정 시 LAN 내 누구나 생성(모델 API 비용 지출)을 트리거할 수 있다.
+            # - name: COMPARE_AGENTS_SRC
+            #   value: /srv/agents/plr-eval-server-master   # .claude/ 를 포함한 체크아웃
+            # - name: CLAUDE_BIN
+            #   value: claude                               # 기본값
+            # - name: COMPARE_TIMEOUT_SEC
+            #   value: "1800"                               # 기본값 (초과 시 kill→failed)
+            # - name: COMPARE_PYTHONPATH
+            #   value: /srv/app                             # evalkit 이 있는 레포 루트
             - name: GIT_REF
               value: master                  # 배포할 브랜치/태그
             - name: EVAL_SERVER_TOKEN
