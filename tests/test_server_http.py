@@ -277,3 +277,100 @@ def test_dataset_push_structure_guard_rejects_missing_labels(tmp_path, monkeypat
                    files={"archive": ("d.tgz", no_labels, "application/gzip")},
                    data={"name": "broken_ds"})
         assert r.status_code == 422, f"labels.jsonl 없는 데이터셋은 거부돼야: {r.status_code}"
+
+
+# =====================================================================
+# TASK-003 (SRV-003) — run id 화이트리스트 검증: 헬퍼 단위 + /diff 통합
+# =====================================================================
+
+def test_require_valid_run_id_accepts_real_run(client):
+    """정상 케이스: 실제 submit 된 run id 는 통과하고 실존 run 디렉터리를 반환."""
+    from server.web import require_valid_run_id
+
+    r = _submit(client, "v1", [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+                               {"obj_id": "b", "plr_json": _person("female", 0.8)}])
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+
+    run_dir = require_valid_run_id(run_id)
+    assert run_dir.is_dir()
+    assert run_dir.name == run_id
+    assert run_dir.parent.name == "runs"
+
+
+@pytest.mark.parametrize("bad_id", [
+    "../quarantine/x",              # 상대 경로 순회
+    "..",                           # 부모 참조 단독
+    ".",                            # 현재 디렉터리
+    "",                             # 빈 문자열
+    "/etc",                         # 절대경로 — pathlib 결합 시 앞부분 통째 대체
+    "/etc/passwd",
+    "a/b",                          # 경로 구분자 포함
+    "..\\quarantine\\x",            # 백슬래시 변형
+    "r20260101-000000-abcdef/../x",  # 정상 형식 + 순회 접미
+    "r20260101-000000-ABCDEF",      # hex 대문자 — new_run_id 는 소문자만 생성
+    "r20260101-000000-abcdeg",      # hex 아님
+    "no-such-run",                  # 형식 불일치
+    "r20260101-000000-abcdef\n",    # 개행 주입
+])
+def test_require_valid_run_id_rejects_bad_input(client, bad_id):
+    """거부 케이스: 경로 순회·절대경로·형식 불일치 전부 HTTPException 404."""
+    from fastapi import HTTPException
+
+    from server.web import require_valid_run_id
+
+    with pytest.raises(HTTPException) as exc:
+        require_valid_run_id(bad_id)
+    assert exc.value.status_code == 404
+
+
+def test_require_valid_run_id_rejects_wellformed_but_missing(client):
+    """형식은 맞지만 runs/ 에 실존하지 않는 id 는 404 (실존 디렉터리 확인 계층)."""
+    from fastapi import HTTPException
+
+    from server.web import require_valid_run_id
+
+    with pytest.raises(HTTPException) as exc:
+        require_valid_run_id("r20200101-000000-abcdef")
+    assert exc.value.status_code == 404
+
+
+def test_diff_rejects_traversal_and_hides_quarantine(client, tmp_path):
+    """/diff 통합: '..' 순회로 quarantine 격리본 surface 를 열람할 수 없어야 한다
+    (SRV-003 재현 시나리오). 404 + 응답 본문에 파일 내용 미노출."""
+    r = _submit(client, "v1", [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+                               {"obj_id": "b", "plr_json": _person("female", 0.8)}])
+    assert r.status_code == 201, r.text
+    good = r.json()["run_id"]
+
+    # 격리본을 흉내낸 파일을 데이터 루트의 quarantine/ 에 심는다.
+    marker = "QUARANTINE-LEAK-MARKER-6f2a"
+    qdir = tmp_path / "data" / "quarantine" / "qrun" / "surface"
+    qdir.mkdir(parents=True)
+    (qdir / "leak.yaml").write_text(f"secret: {marker}\n", encoding="utf-8")
+
+    for bad in ("../quarantine/qrun", "/etc", "a/b"):
+        for params in ({"a": bad, "b": good}, {"a": good, "b": bad}):
+            resp = client.get("/diff", params=params)
+            assert resp.status_code == 404, (params, resp.status_code)
+            assert marker not in resp.text, f"격리본 내용이 노출됨: {params}"
+
+    # 절대경로로 quarantine surface 부모를 직접 지정하는 변형도 차단.
+    resp = client.get("/diff", params={"a": str(qdir.parent), "b": good})
+    assert resp.status_code == 404
+    assert marker not in resp.text
+
+
+def test_diff_normal_pair_still_works(client):
+    """정상 run id 쌍의 /diff 는 기존과 동일하게 200 (동작 불변 —
+    상세 diff 회귀는 test_server_diff_and_delete.py 가 커버)."""
+    rows = [{"obj_id": "a", "plr_json": _person("male", 0.9)},
+            {"obj_id": "b", "plr_json": _person("female", 0.8)}]
+    ra = _submit(client, "v1", rows)
+    rb = _submit(client, "v2", rows)
+    assert ra.status_code == 201 and rb.status_code == 201
+    run_a, run_b = ra.json()["run_id"], rb.json()["run_id"]
+
+    resp = client.get("/diff", params={"a": run_a, "b": run_b})
+    assert resp.status_code == 200
+    assert run_a in resp.text and run_b in resp.text

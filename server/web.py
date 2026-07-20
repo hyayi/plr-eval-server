@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,6 +24,34 @@ templates.env.filters["fromjson"] = json.loads
 def _state():
     from server.app import STATE
     return STATE
+
+
+# new_run_id()(storage.py)가 생성하는 유일한 형식 — r<YYYYMMDD-HHMMSS>-<6hex>.
+# 실사 결과 레포 분리 커밋(1f224b0) 이래 형식 변경 이력 없음(legacy 형식 부재).
+_RUN_ID_RE = re.compile(r"^r[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+
+
+def require_valid_run_id(run_id: str) -> Path:
+    """run id 화이트리스트 검증(SRV-003) — 통과 시 실존 run 디렉터리를 반환.
+
+    쿼리/경로 파라미터로 들어온 run id 계열 입력을 파일시스템 경로에 결합하기
+    전에 반드시 이 단일 지점을 거친다 (compare-reports 등 신규 엔드포인트도
+    재사용 — TASK-004). 2중 방어:
+      1) 형식: _RUN_ID_RE 화이트리스트만 수용 — 경로 구분자·'..'·절대경로가
+         원천 차단된다. pathlib은 절대경로 인자가 오면 앞부분을 통째로
+         대체하므로(`root/"runs"/"/x" == Path("/x")`) 결합 전 차단이 필수.
+      2) 경계: resolve 후 runs/ 하위인지 + 실존 디렉터리인지 확인
+         (1)이 뚫려도 데이터 루트 밖 접근이 불가한 방어 계층.
+    불합격은 기존 관례(app.py run_detail)와 동일하게 404 'run ... not found'.
+    """
+    root = _state()["root"]
+    runs_root = (root / "runs").resolve()
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(404, f"run {run_id!r} not found")
+    run_dir = (runs_root / run_id).resolve()
+    if not run_dir.is_relative_to(runs_root) or not run_dir.is_dir():
+        raise HTTPException(404, f"run {run_id!r} not found")
+    return run_dir
 
 
 def _run_rows(dataset: str, all_history: bool) -> list[dict]:
@@ -130,12 +159,16 @@ def _diff_norm_key(rel: str) -> str:
 
 @router.get("/diff", response_class=HTMLResponse)
 def diff_page(request: Request, a: str, b: str):
-    root = _state()["root"]
     from server.storage import read_json
 
-    def _files(run_id: str) -> dict[str, tuple[str, str]]:
+    # SRV-003: a·b는 쿼리 파라미터라 '..'/절대경로를 담을 수 있다 —
+    # 경로 결합·파일 읽기 전에 화이트리스트 검증(불합격 404).
+    dir_a = require_valid_run_id(a)
+    dir_b = require_valid_run_id(b)
+
+    def _files(run_id: str, run_dir: Path) -> dict[str, tuple[str, str]]:
         """{norm_key: (actual_relpath, content)} — 실제 경로는 diff 헤더 표시용."""
-        base = root / "runs" / run_id / "surface"
+        base = run_dir / "surface"
         if not base.is_dir():
             raise HTTPException(404, f"run {run_id!r} has no surface")
         out: dict[str, tuple[str, str]] = {}
@@ -149,7 +182,7 @@ def diff_page(request: Request, a: str, b: str):
             out[_diff_norm_key(rel)] = (rel, p.read_text(encoding="utf-8", errors="replace"))
         return out
 
-    fa, fb = _files(a), _files(b)
+    fa, fb = _files(a, dir_a), _files(b, dir_b)
     diffs = []
     for key in sorted(set(fa) | set(fb)):
         rel_a, content_a = fa.get(key, (None, ""))
@@ -160,8 +193,8 @@ def diff_page(request: Request, a: str, b: str):
                                       tofile=f"{b}/{rel_b or key}"))
         if d:
             diffs.append({"path": key, "diff": "".join(d)})
-    prov_a = read_json(root / "runs" / a / "run_provenance.json") or {}
-    prov_b = read_json(root / "runs" / b / "run_provenance.json") or {}
+    prov_a = read_json(dir_a / "run_provenance.json") or {}
+    prov_b = read_json(dir_b / "run_provenance.json") or {}
     param_keys = sorted(set(prov_a) | set(prov_b))
     return templates.TemplateResponse(request, "diff.html", {
         "a": a, "b": b, "diffs": diffs,
