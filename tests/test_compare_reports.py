@@ -948,3 +948,122 @@ def test_leaderboard_notice_excludes_other_dataset_jobs(make_client, tmp_path):
         assert 'id="active-jobs"' in page.text
         assert f'href="/compare/{oa}__{ob}"' in page.text
         assert "running" in page.text
+
+
+# =====================================================================
+# TASK-010 — 보고서 md 다운로드 라우트 + 리더보드 상시 /compare/ 네비 (REQ-008/010)
+# =====================================================================
+
+def test_report_download_all_names_with_headers(make_client, tmp_path):
+    """USER-REQ-008/SRV-013: 4종 보고서 각각 GET /compare/{pair}/{name}/download
+    → 200 + Content-Type text/markdown + Content-Disposition attachment(파일명),
+    본문은 원문 md 와 일치. 브라우저가 실행 않고 저장하는 계약."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+        bodies = {n: f"# {n} 다운로드 본문\n내용 {i}\n"
+                  for i, n in enumerate(_FULL_REPORTS)}
+        _plant_job(tmp_path / "data", a, b, "done", reports=bodies)
+        for n in _FULL_REPORTS:
+            r = c.get(f"/compare/{pair}/{n}/download")
+            assert r.status_code == 200, n
+            assert r.headers["content-type"].startswith("text/markdown"), r.headers
+            cd = r.headers["content-disposition"]
+            assert cd.startswith("attachment"), cd
+            assert f'filename="{pair}_{n}.md"' in cd, cd
+            assert r.text == bodies[n]                # 본문 원문 일치
+
+
+def test_report_download_missing_and_invalid_404(make_client, tmp_path):
+    """미존재 보고서·비-REPORT_NAMES name·불합격 run id·경로 순회 → 404.
+    검증 6줄(split_pair+require_valid_run_id×2+REPORT_NAMES+is_file) 재사용 실증."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+        # 화이트리스트 name 이나 파일 미존재 (job 미생성) → 404
+        assert c.get(f"/compare/{pair}/00_run_summary/download").status_code == 404
+        # 파일 심되 화이트리스트 밖 name·확장자 부착·잡파일 → 404
+        d = _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        (d / "job.json.bak").write_text("secret", encoding="utf-8")
+        for bad in ("job", "job.json", "00_run_summary.md", "04_extra",
+                    "env-dump", "job.json.bak"):
+            r = c.get(f"/compare/{pair}/{bad}/download")
+            assert r.status_code == 404, bad
+            assert "secret" not in r.text
+        # 화이트리스트 name 이라도 파일이 지워지면 404
+        (d / "01_metric_diff.md").unlink()
+        assert c.get(f"/compare/{pair}/01_metric_diff/download").status_code == 404
+        # 형식 불일치·비실존 pair(경로 순회 페이로드 포함) → 404
+        for bad_pair in ("evil__x", f"{a}", "..__..", f"{a}__{a}__x",
+                         f"{a}__r20200101-000000-abcdef"):
+            assert c.get(
+                f"/compare/{bad_pair}/00_run_summary/download").status_code == 404, bad_pair
+
+
+def test_download_route_resolution_disjoint_from_view(make_client, tmp_path):
+    """AC5: 다운로드(4세그먼트)와 열람(3세그먼트) 라우트가 상호 배타 —
+    /download 추가 후에도 열람 GET {pair}/{name}·상태 GET {pair}·목록 GET
+    /compare/·run 상세 동결 키가 모두 불변 공존(포획/충돌 없음, INT-002)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+
+        # 열람(3세그) 과 다운로드(4세그) 는 서로 다른 응답으로 공존
+        view = c.get(f"/compare/{pair}/00_run_summary")
+        assert view.status_code == 200
+        assert "content-disposition" not in view.headers        # 열람은 첨부 아님
+        dl = c.get(f"/compare/{pair}/00_run_summary/download")
+        assert dl.status_code == 200
+        assert dl.headers["content-disposition"].startswith("attachment")
+
+        # 상태 페이지·목록·run 상세 동결 키 불변
+        assert c.get(f"/compare/{pair}").status_code == 200
+        assert c.get("/compare/").status_code == 200
+        d = c.get(f"/api/runs/{a}", headers=TOKEN)
+        assert d.status_code == 200
+        assert set(d.json()) == {"meta", "metrics", "surface_files", "provenance"}
+
+
+def test_report_view_shows_download_links(make_client, tmp_path):
+    """열람 UI(done 목록·개별 보고서 헤더)에 다운로드 링크가 자연스럽게 노출된다."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        pair = f"{a}__{b}"
+        _plant_job(tmp_path / "data", a, b, "done", reports=_FULL_REPORTS)
+        # done 상태 페이지: 각 보고서 다운로드 링크
+        page = c.get(f"/compare/{pair}")
+        assert page.status_code == 200
+        for n in _FULL_REPORTS:
+            assert f"/compare/{pair}/{n}/download" in page.text
+        # 개별 보고서 열람 페이지: 현재 보고서 다운로드 링크
+        view = c.get(f"/compare/{pair}/00_run_summary")
+        assert f"/compare/{pair}/00_run_summary/download" in view.text
+
+
+def test_leaderboard_has_persistent_compare_link(make_client, tmp_path):
+    """SRV-015/USER-REQ-010: 진행 중 job 이 0건이어도 리더보드에 /compare/ 목록
+    상시 링크가 존재하고, active_jobs 가 있을 때도 상시 링크 + 기존 진행 중
+    안내줄이 함께 유지된다 (run-002 회귀 없음)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a_old, _a_new = _submit(c, "v1"), _submit(c, "v1")
+        b_old, _b_new = _submit(c, "v2"), _submit(c, "v2")
+
+        # active_jobs 0건 — 진행 중 안내줄 마커는 없어도 상시 링크는 존재
+        page = c.get("/d/http_ds")
+        assert page.status_code == 200
+        assert 'id="active-jobs"' not in page.text
+        assert 'href="/compare/"' in page.text
+        assert "비교 보고서 목록" in page.text
+
+        # active_jobs 있는 경우 — 상시 링크 + 진행 중 안내줄 공존
+        _plant_job(tmp_path / "data", a_old, b_old, "queued")
+        page = c.get("/d/http_ds")
+        assert 'id="active-jobs"' in page.text                   # 안내줄 유지
+        assert 'href="/compare/"' in page.text                   # 상시 링크 유지
+        assert "비교 보고서 목록" in page.text

@@ -7,6 +7,9 @@
   {% else %}버전명당 최신 run · <a href="/d/{{ dataset }}?all=1">전체 이력 보기</a>{% endif %}
   — 컬럼 클릭으로 정렬 · 두 run 선택 후 <button onclick="gotoDiff()">비교(diff)</button>
   <button onclick="createReport(this)">보고서 생성</button>
+  {# SRV-015/USER-REQ-010: /compare/ 목록 상시 진입점 — active_jobs 블록(11-19)
+     밖에 두어 진행 중 job 이 0건이어도 완료 보고서 목록에 도달할 수 있다. #}
+  · <a href="/compare/">비교 보고서 목록</a>
 </div>
 {% if active_jobs %}
 {# REQ-005(TASK-008): 이 dataset 의 진행 중(queued/running) 보고서 안내 —

@@ -4,7 +4,8 @@
 {% if report_name %}
 <h1>{{ report_name }}.md</h1>
 <div class="sub"><a href="/compare/{{ a }}__{{ b }}">← 보고서 목록</a> ·
-  <a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a></div>
+  <a href="/r/{{ a }}">{{ a }}</a> vs <a href="/r/{{ b }}">{{ b }}</a> ·
+  <a href="/compare/{{ a }}__{{ b }}/{{ report_name }}/download">이 보고서 다운로드(.md)</a></div>
 {# 렌더 HTML 은 mdrender.render_markdown_safe 산출물 — 입력 전량 escape 후
    화이트리스트 태그만 방출하는 closed-by-construction 렌더러라 script/이벤트
    핸들러/위험 URL 이 구조상 나타날 수 없다. 이 |safe 는 그 신뢰 경계 안의
@@ -36,7 +37,8 @@
   <button onclick="createReport(1, this)">다시 생성(덮어쓰기)</button></div>
 <h2>보고서</h2>
 <ul>
-{% for n in report_names %}<li><a href="/compare/{{ a }}__{{ b }}/{{ n }}">{{ n }}.md</a></li>
+{% for n in report_names %}<li><a href="/compare/{{ a }}__{{ b }}/{{ n }}">{{ n }}.md</a>
+  · <a href="/compare/{{ a }}__{{ b }}/{{ n }}/download">다운로드</a></li>
 {% endfor %}</ul>
 {% else %}
 <div class="card">상태: {{ job.status }}</div>

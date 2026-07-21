@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter()
@@ -317,6 +317,39 @@ def compare_report_view(request: Request, pair: str, name: str):
         "report_content": raw,                       # <details> 원문 — |safe 금지
         "report_html": render_markdown_safe(raw),    # 안전 렌더 HTML(Markup)
     })
+
+
+@router.get("/compare/{pair}/{name}/download")
+def compare_report_download(pair: str, name: str):
+    """보고서 md 다운로드 — 열람(compare_report_view)과 동일한 검증 6줄을
+    재사용하되 응답만 첨부(attachment)로 바꾼다 (SRV-013, USER-REQ-008).
+
+    4-세그먼트 경로(/compare/{pair}/{name}/download)라 3-세그먼트 열람 라우트
+    /compare/{pair}/{name}({name}=[^/]+ 은 '/' 불매치)와 세그먼트 수가 달라
+    상호 배타 — 등록 순서와 무관하게 포획이 발생하지 않는다 (INT-002 caveat,
+    라우트 해석 테스트로 실증). GET 이라 token_guard 자동 면제.
+
+    파일명은 검증을 통과한 값만으로 구성한다 — a/b 는 require_valid_run_id
+    화이트리스트(_RUN_ID_RE), name 은 REPORT_NAMES 리터럴이라 헤더/파일명
+    인젝션이 원천 불가능하다. 브라우저가 실행하지 않고 저장하도록
+    Content-Disposition: attachment 로 서빙한다."""
+    from server.compare import REPORT_NAMES, job_dir_of, split_pair
+
+    a, b = split_pair(pair)
+    require_valid_run_id(a)
+    require_valid_run_id(b)
+    if name not in REPORT_NAMES:
+        raise HTTPException(404, f"no such report {name!r}")
+    path = job_dir_of(_state()["root"], a, b) / f"{name}.md"
+    if not path.is_file():
+        raise HTTPException(404, f"no such report {name!r}")
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    filename = f"{a}__{b}_{name}.md"           # 검증된 화이트리스트 값만 조합
+    return Response(
+        content=raw,
+        media_type="text/markdown",            # Starlette 가 charset=utf-8 부기
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # =====================================================================
