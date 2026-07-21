@@ -284,7 +284,7 @@ def compare_page(request: Request, pair: str):
     return templates.TemplateResponse(request, "compare.html", {
         "a": a, "b": b, "job": job if isinstance(job, dict) else None,
         "report_names": REPORT_NAMES,
-        "report_name": None, "report_content": None,
+        "report_name": None, "report_content": None, "report_html": None,
     })
 
 
@@ -293,9 +293,14 @@ def compare_report_view(request: Request, pair: str, name: str):
     """보고서 md 열람 — name 은 고정 화이트리스트(그 외 404).
 
     에이전트 산출 md 는 신뢰 불가 업로드 표면 텍스트에서 파생된 내용이라
-    raw HTML 렌더 시 스크립트 주입이 가능하다 (SRV-005) — Jinja2 autoescape
-    를 통과하는 <pre> 텍스트로만 서빙한다 (|safe·markdown 렌더 금지)."""
+    raw HTML 렌더 시 스크립트 주입이 가능하다 (SRV-005). 가독성을 위해
+    mdrender.render_markdown_safe 로 안전 서브셋만 렌더한다 — 입력을 전량
+    escape 한 뒤 화이트리스트 태그만 방출하는 closed-by-construction 렌더러라
+    script/이벤트핸들러/위험 URL 이 결과에 나타날 수 없다(TASK-009). 원문(raw)
+    md 는 <details> 안 autoescape <pre> 로 함께 서빙하되 |safe 는 적용하지
+    않는다(SRV-005 불변식 유지)."""
     from server.compare import REPORT_NAMES, job_dir_of, split_pair
+    from server.mdrender import render_markdown_safe
 
     a, b = split_pair(pair)
     require_valid_run_id(a)
@@ -305,10 +310,12 @@ def compare_report_view(request: Request, pair: str, name: str):
     path = job_dir_of(_state()["root"], a, b) / f"{name}.md"
     if not path.is_file():
         raise HTTPException(404, f"no such report {name!r}")
+    raw = path.read_text(encoding="utf-8", errors="replace")
     return templates.TemplateResponse(request, "compare.html", {
         "a": a, "b": b, "job": None, "report_names": REPORT_NAMES,
         "report_name": name,
-        "report_content": path.read_text(encoding="utf-8", errors="replace"),
+        "report_content": raw,                       # <details> 원문 — |safe 금지
+        "report_html": render_markdown_safe(raw),    # 안전 렌더 HTML(Markup)
     })
 
 

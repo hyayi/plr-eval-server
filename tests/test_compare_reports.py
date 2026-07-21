@@ -561,6 +561,37 @@ def test_report_view_escapes_malicious_md(make_client, tmp_path):
         assert c.get(f"/compare/{a}__{b}/03_analysis_result").status_code == 200
 
 
+def test_report_view_renders_safe_html_with_raw_details(make_client, tmp_path):
+    """TASK-009: 열람 페이지가 mdrender 로 헤더·표·강조를 렌더(가독성)하고,
+    원문(raw)은 <details> 안 autoescape <pre> 로 함께 제공한다. 신뢰 불가 md
+    의 <script> 는 렌더/원문 양쪽에서 escape 되어 실행 태그로 방출되지 않는다
+    (SRV-005 불변식 유지 — report_content 에 |safe 미적용)."""
+    with make_client(_OK_BODY) as c:
+        _register_dataset(c)
+        a, b = _submit(c, "v1"), _submit(c, "v2")
+        report = dict(_FULL_REPORTS)
+        report["00_run_summary"] = (
+            "# 요약\n\n"
+            "| 지표 | v1 | v2 |\n|---|---|---|\n| acc | 0.9 | 0.8 |\n\n"
+            "- 항목 하나\n- 항목 둘\n\n"
+            "**중요** 하고 `코드` 이며 <script>alert(1)</script> 는 위험\n"
+        )
+        _plant_job(tmp_path / "data", a, b, "done", reports=report)
+        page = c.get(f"/compare/{a}__{b}/00_run_summary")
+        assert page.status_code == 200
+        text = page.text
+        # 렌더 산출물 — 헤더·표·목록·강조·인라인코드가 화이트리스트 태그로 표시
+        assert "<h1>요약</h1>" in text
+        assert "<table>" in text and "<th>지표</th>" in text
+        assert "<li>항목 하나</li>" in text
+        assert "<strong>중요</strong>" in text and "<code>코드</code>" in text
+        # 원문(raw) 보기 <details> 토글 제공
+        assert "<details>" in text and "원문(raw) 보기" in text
+        # 신뢰 불가 <script> 는 렌더·원문 어디서도 실행 태그로 방출되지 않는다
+        assert "<script>alert(1)</script>" not in text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text
+
+
 def test_report_view_name_whitelist(make_client, tmp_path):
     """name 은 00~03 고정 화이트리스트 — 그 외·미존재 파일은 404."""
     with make_client(_OK_BODY) as c:
