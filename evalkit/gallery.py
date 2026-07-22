@@ -79,12 +79,38 @@ h1{font-size:20px;margin:0 0 4px} .sub{color:#8fa1c0;font-size:13px;margin-botto
 """
 
 _JS_SINGLE = """
-function flt(mode, btn){
-  document.querySelectorAll('.filters button').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
+// 축별(status/label/pred) 선택 집합. 축 내 다중선택은 OR, 세 축은 AND 로 결합하고
+// 어느 축도 안 고르면 전체를 표시한다(기존 동작 보존). 축을 분리해 label 값과
+// pred 값이 같아도(male vs male) 서로 다른 data-* 에만 대조 → 교차 오염이 없다.
+const sel = {status:new Set(), label:new Set(), pred:new Set()};
+function flt(axis, val, btn){
+  if(axis==='status' && val==='all'){
+    sel.status.clear();               // '전체' = 상태 축 초기화
+  } else if(sel[axis].has(val)){
+    sel[axis].delete(val);            // 재클릭 = 토글 해제
+  } else {
+    sel[axis].add(val);
+  }
+  render();
+  syncButtons();
+}
+function render(){
   document.querySelectorAll('.card').forEach(c=>{
-    c.style.display = (mode==='all' || c.dataset.k===mode
-                       || c.dataset.label===mode || c.dataset.pred===mode) ? '' : 'none';
+    const okStatus = sel.status.size===0 || sel.status.has(c.dataset.k);
+    const okLabel  = sel.label.size===0  || sel.label.has(c.dataset.label);
+    const okPred   = sel.pred.size===0   || sel.pred.has(c.dataset.pred);
+    c.style.display = (okStatus && okLabel && okPred) ? '' : 'none';
+  });
+}
+// 버튼 on 표시는 항상 sel 에서 파생 → 상태 드리프트 없음.
+// '전체' 버튼은 상태 축이 비었을 때만 켠다.
+function syncButtons(){
+  document.querySelectorAll('.filters button').forEach(b=>{
+    const ax = b.dataset.axis, v = b.dataset.val;
+    const on = (ax==='status' && v==='all')
+      ? sel.status.size===0
+      : (sel[ax] && sel[ax].has(v));
+    b.classList.toggle('on', !!on);
   });
 }
 """
@@ -230,7 +256,8 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
 
     cards: list[tuple[tuple, str]] = []
     n_ok = n_wrong = n_nolabel = 0
-    classes: set[str] = set()
+    classes: set[str] = set()        # label 축 버튼 재료 (label 값만)
+    pred_classes: set[str] = set()   # pred 축 버튼 재료 (정규화된 pred 값)
     for oid in obj_ids:
         crop = ds / "crops" / f"{oid}.jpg"
         if not crop.exists():
@@ -238,6 +265,12 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
         label = labels.get(oid)
         p = preds.get(oid) or {}
         pred = p.get("pred")
+        # SRV-018: pred=None/빈값을 카드 생성 단일 지점에서 'unknown' 으로 정규화해
+        #   data-pred 와 pred 버튼 버킷 양쪽에 동일 적용 → 소스(재추출 vs 직접
+        #   predictions.jsonl)와 무관하게 같은 버킷으로 모인다.
+        pred_norm = str(pred) if pred not in (None, "") else "unknown"
+        # kind/badge 분기 밖에서 수집 → unlabeled·오답 카드의 pred 도 버킷에 포함(SRV-016).
+        pred_classes.add(pred_norm)
         margin, quality = p.get("margin"), p.get("quality")
         if label is None or pred is None or label == "unknown":
             kind, badge, cls = "unlabeled", '<span class="badge unl">UNSCORED</span>', ""
@@ -255,10 +288,10 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
             classes.add(str(label))
         cards.append((rank, (
             f'<div class="card{cls}" data-k="{kind}" '
-            f'data-label="{html.escape(str(label or ""))}" data-pred="{html.escape(str(pred or ""))}">'
+            f'data-label="{html.escape(str(label or ""))}" data-pred="{html.escape(pred_norm)}">'
             f'<img src="data:image/jpeg;base64,{_thumb_b64(crop)}" alt="{html.escape(oid)}">'
             f'<div class="oid">{html.escape(oid)}</div>'
-            f'<div class="pl">pred <b>{html.escape(str(pred or "—"))}</b> · '
+            f'<div class="pl">pred <b>{html.escape(pred_norm)}</b> · '
             f'label <b>{html.escape(str(label or "—"))}</b></div>'
             f"{badge}"
             f'<div class="sc">margin {_fmt(margin)} · quality {_fmt(quality)}</div>'
@@ -267,11 +300,22 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
 
     n = n_ok + n_wrong
     acc = f"{n_ok / n:.3f}" if n else "—"
-    filters = ['<button class="on" onclick="flt(\'all\',this)">전체</button>',
-               '<button onclick="flt(\'wrong\',this)">오답만</button>',
-               '<button onclick="flt(\'correct\',this)">정답만</button>']
+    # 각 버튼에 축 식별자(data-axis)·값(data-val)을 실어 flt() 가 축을 구분하고
+    # syncButtons() 가 on 표시를 sel 에서 파생하게 한다(축 교차 오염 원천 제거).
+    filters = ['<button class="on" data-axis="status" data-val="all" onclick="flt(\'status\',\'all\',this)">전체</button>',
+               '<button data-axis="status" data-val="wrong" onclick="flt(\'status\',\'wrong\',this)">오답만</button>',
+               '<button data-axis="status" data-val="correct" onclick="flt(\'status\',\'correct\',this)">정답만</button>']
     for c in sorted(classes):
-        filters.append(f'<button onclick="flt(\'{html.escape(c)}\',this)">label={html.escape(c)}</button>')
+        filters.append(
+            f'<button data-axis="label" data-val="{html.escape(c)}" '
+            f'onclick="flt(\'label\',\'{html.escape(c)}\',this)">label={html.escape(c)}</button>')
+    # SRV-019: 다중-클래스 도메인에서는 pred 클래스가 많아 pred 버튼이 필터바를 비대하게
+    #   만들 수 있다. 지금은 가시성 우선으로 값별 1버튼을 유지하고, 상위 K개+'기타' 묶음/
+    #   접이(details) 등 밀도 개선은 후속 run 으로 미룬다(non_goals).
+    for c in sorted(pred_classes):
+        filters.append(
+            f'<button data-axis="pred" data-val="{html.escape(c)}" '
+            f'onclick="flt(\'pred\',\'{html.escape(c)}\',this)">pred={html.escape(c)}</button>')
     sub = (f"scored {n} (correct {n_ok} · wrong {n_wrong} · unscored {n_nolabel})"
            f" · accuracy {acc} · 오답이 먼저, 저-margin 순")
     out.write_text(
