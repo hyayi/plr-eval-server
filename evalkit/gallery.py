@@ -268,7 +268,7 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
         # SRV-018: pred=None/빈값을 카드 생성 단일 지점에서 'unknown' 으로 정규화해
         #   data-pred 와 pred 버튼 버킷 양쪽에 동일 적용 → 소스(재추출 vs 직접
         #   predictions.jsonl)와 무관하게 같은 버킷으로 모인다.
-        pred_norm = pred if pred not in (None, "") else "unknown"
+        pred_norm = str(pred) if pred not in (None, "") else "unknown"
         # kind/badge 분기 밖에서 수집 → unlabeled·오답 카드의 pred 도 버킷에 포함(SRV-016).
         pred_classes.add(pred_norm)
         margin, quality = p.get("margin"), p.get("quality")
@@ -291,7 +291,7 @@ def _build_single(ds: Path, out: Path, attribute: str | None,
             f'data-label="{html.escape(str(label or ""))}" data-pred="{html.escape(pred_norm)}">'
             f'<img src="data:image/jpeg;base64,{_thumb_b64(crop)}" alt="{html.escape(oid)}">'
             f'<div class="oid">{html.escape(oid)}</div>'
-            f'<div class="pl">pred <b>{html.escape(str(pred or "—"))}</b> · '
+            f'<div class="pl">pred <b>{html.escape(pred_norm)}</b> · '
             f'label <b>{html.escape(str(label or "—"))}</b></div>'
             f"{badge}"
             f'<div class="sc">margin {_fmt(margin)} · quality {_fmt(quality)}</div>'

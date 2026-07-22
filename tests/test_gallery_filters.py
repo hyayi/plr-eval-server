@@ -59,6 +59,33 @@ def _make_binary_ds(base: Path) -> Path:
     return base
 
 
+def _make_numeric_ds(base: Path) -> Path:
+    """숫자(정수) label/pred 단일 속성 데이터셋 (QA-ISSUE-007 회귀 재현).
+
+    scoring.py:143 이 str(pred) 로 숫자 pred 를 201 로 수용하는 지원 형상에서,
+    갤러리 렌더가 str() 강제 없이 html.escape(pred_norm) 를 부르면
+    'int' object has no attribute 'replace' 로 500 크래시했다(TASK-011 회귀).
+
+    rows: (obj_id, label, pred)  — 정수 스칼라
+      a 0 0  correct
+      b 1 2  wrong
+      c 2 2  correct
+    """
+    (base / "crops").mkdir(parents=True)
+    rows = [("a", 0, 0), ("b", 1, 2), ("c", 2, 2)]
+    with open(base / "labels.jsonl", "w", encoding="utf-8") as f:
+        for oid, lab, _p in rows:
+            f.write(json.dumps({"obj_id": oid, "label": lab}) + "\n")
+    with open(base / "predictions.jsonl", "w", encoding="utf-8") as f:
+        for oid, _l, pred in rows:
+            f.write(json.dumps({"obj_id": oid, "pred": pred,
+                                "margin": 0.5, "quality": 0.5}) + "\n")
+    for oid, *_ in rows:
+        Image.new("RGB", (60, 90), (100, 100, 100)).save(
+            str(base / "crops" / f"{oid}.jpg"), format="JPEG")
+    return base
+
+
 # =====================================================================
 # 1. HTML 단언 — pred 버튼 존재 · label/상태 버튼 유지 · data-pred 정규화 · 축 식별자
 # =====================================================================
@@ -104,6 +131,68 @@ def test_gallery_html_normalizes_none_pred_to_unknown(tmp_path: Path) -> None:
     assert ">pred=unknown</button>" in text
     # 빈 문자열 data-pred 잔존 금지(정규화 통일)
     assert 'data-pred=""' not in text
+
+
+def test_gallery_numeric_pred_renders_without_error(tmp_path: Path) -> None:
+    """QA-ISSUE-007 회귀: 숫자(정수) pred 데이터에서 build_gallery 가 예외 없이
+    렌더되고, data-pred 가 str() 정규화된 문자열 값이며 pred 버튼이 생성된다.
+
+    이전 회귀에서는 pred_norm 이 raw int 를 보존해 html.escape(pred_norm) 가
+    AttributeError('int' has no 'replace') 로 500 크래시했다. str(pred) 강제로 복구.
+    """
+    from evalkit.gallery import build_gallery
+
+    ds = _make_numeric_ds(tmp_path / "ds")
+    # 예외 없이 렌더(회귀 시 여기서 AttributeError)
+    text = Path(build_gallery(ds)).read_text(encoding="utf-8")
+
+    # data-pred 가 문자열 값으로 정규화(raw int 아님) — scoring.py:143 규칙과 통일
+    assert 'data-pred="0"' in text
+    assert 'data-pred="2"' in text
+    # pred 버튼도 문자열 버킷으로 생성(SRV-018 소스 무관 동일 버킷)
+    assert ">pred=0</button>" in text
+    assert ">pred=2</button>" in text
+    # label 버튼도 문자열로 정규화(truthy 정수 라벨)
+    assert ">label=1</button>" in text
+    assert ">label=2</button>" in text
+    # 표시 pl(pred 표시)도 동일 정규화 버킷 사용 — raw int 새지 않음
+    assert "pred <b>0</b>" in text
+    assert "pred <b>2</b>" in text
+
+
+def test_gallery_numeric_pred_reextracted_renders(tmp_path: Path) -> None:
+    """QA-ISSUE-007 서버 경로: predictions.jsonl 없이 attributes.jsonl + manifest
+    pred_path 로 숫자 pred 를 재추출(_extracted_preds)하는 경로도 예외 없이 렌더된다.
+
+    이는 render_run_gallery(server)가 타는 경로(재추출 pred 는 raw 숫자 유지,
+    gallery.py:166)로, _build_single 의 str() 정규화가 없으면 500 크래시했다.
+    """
+    from evalkit.gallery import build_gallery
+
+    ds = tmp_path / "ds"
+    (ds / "crops").mkdir(parents=True)
+    (ds / "manifest.yaml").write_text(
+        "n: 3\nattributes:\n  grp:\n    labels: [0, 1, 2]\n"
+        "    pred_path: attributes.grp_id\n", encoding="utf-8")
+    rows = [("a", 0, 0), ("b", 1, 2), ("c", 2, 2)]  # (obj, label, numeric pred)
+    with open(ds / "labels.jsonl", "w", encoding="utf-8") as f:
+        for oid, lab, _p in rows:
+            f.write(json.dumps({"obj_id": oid, "labels": {"grp": lab}}) + "\n")
+    with open(ds / "attributes.jsonl", "w", encoding="utf-8") as f:
+        for oid, _l, pred in rows:
+            f.write(json.dumps({"obj_id": oid,
+                                "plr_json": {"attributes": {"grp_id": pred}}}) + "\n")
+    for oid, *_ in rows:
+        Image.new("RGB", (60, 90), (100, 100, 100)).save(
+            str(ds / "crops" / f"{oid}.jpg"), format="JPEG")
+
+    # 재추출 경로에서 예외 없이 렌더(회귀 시 여기서 AttributeError → 서버 500)
+    text = Path(build_gallery(ds)).read_text(encoding="utf-8")
+    # 재추출 숫자 pred 가 문자열 data-pred 로 정규화되고 pred 버튼 생성
+    assert 'data-pred="0"' in text
+    assert 'data-pred="2"' in text
+    assert ">pred=0</button>" in text
+    assert ">pred=2</button>" in text
 
 
 def test_gallery_html_escapes_button_values(tmp_path: Path) -> None:
