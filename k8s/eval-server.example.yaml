@@ -28,6 +28,13 @@ stringData:
   EVAL_SERVER_TOKEN: "CHANGE-ME"        # 변이 API(등록/제출/삭제) 토큰 — 실제 값으로
   # 프라이빗 레포면 <PAT> 포함, 퍼블릭이면 토큰 빼기
   GIT_REPO_URL: "https://<PAT>@github.com/hyayi/plr-eval-server.git"
+  # ── compare-reports 활성화 시에만 필요 (선택 기능) ─────────────────────
+  # 구독/로그인 방식(권장 — 지금 개발에서 쓰는 로그인 계정 그대로):
+  #   개발 머신에서 한 번  `claude setup-token`  실행 → 출력된 장수명 OAuth
+  #   토큰을 아래에 붙여넣는다. 대화형 로그인을 파드에서 할 필요 없음.
+  # CLAUDE_CODE_OAUTH_TOKEN: "CHANGE-ME-oauth-token"
+  # (API 종량제 방식을 쓸 거면 위 대신 ANTHROPIC_API_KEY 를 넣는다)
+  # ANTHROPIC_API_KEY: "CHANGE-ME-api-key"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -75,6 +82,51 @@ spec:
           env:
             - name: EVAL_SERVER_DATA
               value: /data/perception/inseo/plr_server_data   # NFS 하위 전용 데이터 폴더
+            # ── compare-reports (REQ-002) — 선택 기능 ────────────────────────
+            # 이 기본 배포(python:3.12-slim, claude CLI 미설치)에서는 자동 비활성:
+            # POST /api/compare-reports 가 503 + 안내를 반환하고 다른 기능은 정상.
+            #
+            # 활성화하려면 (A) 인증 토큰, (B) claude CLI, (C) 에이전트 정의 3가지가 필요:
+            #
+            # (A) 인증 — 구독/로그인 방식(권장): 위 Secret 의 CLAUDE_CODE_OAUTH_TOKEN
+            #     주석을 해제하고 `claude setup-token` 으로 발급한 토큰을 넣은 뒤,
+            #     아래 env 의 CLAUDE_CODE_OAUTH_TOKEN 주석도 해제한다.
+            #     (API 종량제면 대신 ANTHROPIC_API_KEY 를 Secret+env 로 주입)
+            #
+            # (B)(C) claude CLI + 에이전트 원본은 위 args(부트스트랩)에 다음을 추가:
+            #     # Node + claude CLI 설치
+            #     apt-get install -y --no-install-recommends nodejs npm
+            #     npm i -g @anthropic-ai/claude-code
+            #     # compare-runs 에이전트 정의 원본 clone (읽기 전용 사용)
+            #     git clone --depth 1 https://<PAT>@github.com/hyayi/plr-eval-server-master.git \
+            #       /srv/agents/plr-eval-server-master
+            #   그리고 아래 COMPARE_AGENTS_SRC env 주석을 해제한다. 서버가 기동 시
+            #   <EVAL_SERVER_DATA>/compare_reports/_agents/ 에 tools 축소 사본을 설치해
+            #   실행한다(원본은 읽기 전용). COMPARE_PYTHONPATH 는 evalkit 위치로,
+            #   기본값이 서버 레포 루트(/srv/app)라 보통 생략 가능.
+            #
+            # 격리 권고(SRV-005): 에이전트 프로세스가 임의 명령 실행 벡터가 되지
+            # 않도록 DATA_ROOT 는 읽기 전용 마운트 + compare_reports/ 만 쓰기
+            # 가능하게 구성하고, EVAL_SERVER_TOKEN 을 반드시 설정할 것 —
+            # 미설정 시 LAN 내 누구나 생성(모델 API 비용 지출)을 트리거할 수 있다.
+            # - name: CLAUDE_CODE_OAUTH_TOKEN                # 구독/로그인 방식 (권장)
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: eval-server-secret
+            #       key: CLAUDE_CODE_OAUTH_TOKEN
+            # - name: ANTHROPIC_API_KEY                      # API 종량제 방식 (대안)
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: eval-server-secret
+            #       key: ANTHROPIC_API_KEY
+            # - name: COMPARE_AGENTS_SRC
+            #   value: /srv/agents/plr-eval-server-master   # .claude/ 를 포함한 체크아웃
+            # - name: CLAUDE_BIN
+            #   value: claude                               # 기본값
+            # - name: COMPARE_TIMEOUT_SEC
+            #   value: "1800"                               # 기본값 (초과 시 kill→failed)
+            # - name: COMPARE_PYTHONPATH
+            #   value: /srv/app                             # evalkit 이 있는 레포 루트
             - name: GIT_REF
               value: master                  # 배포할 브랜치/태그
             - name: EVAL_SERVER_TOKEN

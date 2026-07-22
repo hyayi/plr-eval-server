@@ -6,11 +6,25 @@
   {% if all_history %}전체 이력 · <a href="/d/{{ dataset }}">버전명당 최신만</a>
   {% else %}버전명당 최신 run · <a href="/d/{{ dataset }}?all=1">전체 이력 보기</a>{% endif %}
   — 컬럼 클릭으로 정렬 · 두 run 선택 후 <button onclick="gotoDiff()">비교(diff)</button>
+  <button onclick="createReport(this)">보고서 생성</button>
+  {# SRV-015/USER-REQ-010: /compare/ 목록 상시 진입점 — active_jobs 블록(11-19)
+     밖에 두어 진행 중 job 이 0건이어도 완료 보고서 목록에 도달할 수 있다. #}
+  · <a href="/compare/">비교 보고서 목록</a>
 </div>
+{% if active_jobs %}
+{# REQ-005(TASK-008): 이 dataset 의 진행 중(queued/running) 보고서 안내 —
+   0건이면 블록 자체가 미출력되어 기존 레이아웃 회귀 없음. 손상 job 은
+   reconcile 표현상 failed 라 진행 중 대상이 아니다 (run id 매치로 포착돼도
+   _active_compare_jobs 가 상태 필터에서 제외 — web.py 주석 참조). #}
+<div class="card" id="active-jobs">생성 중인 비교 보고서 {{ active_jobs|length }}건 —
+  {% for j in active_jobs %}<a href="/compare/{{ j.pair }}">{{ j.pair }}</a><span class="badge warn">{{ j.status }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+  · <a href="/compare/">전체 목록</a></div>
+{% endif %}
 {% if not rows %}<div class="card">아직 run이 없습니다 — <code>lab submit</code> 또는 <a href="/upload">업로드</a>.</div>{% endif %}
 <table id="lb"><thead><tr>
 <th>선택</th><th>run</th><th>version</th><th>무결성</th>
 <th>macro F1</th><th>accuracy</th>
+<th>macro precision</th><th>macro recall</th>
 <th>model</th><th>제출자</th><th>제출시각</th><th>액션</th>
 </tr></thead><tbody>
 {% for r in rows %}
@@ -22,8 +36,12 @@
     {% if r.git_dirty %}<span class="badge warn" title="커밋 안 된 수정으로 실행됨">dirty</span>{% endif %}</td>
 <td data-v="{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else -1 }}">{{ r.aggregate.macro_f1 if r.aggregate.macro_f1 is not none else '—' }}</td>
 <td data-v="{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else -1 }}">{{ r.aggregate.micro_acc if r.aggregate.micro_acc is not none else '—' }}</td>
+{# macro P/R(REQ-001): 기존 macro F1 셀 패턴 복제 — 단 구형 run은 키 자체가
+   없을 수 있어 .get()으로 접근(없으면 '—', data-v=-1 보장) #}
+<td data-v="{{ r.aggregate.get('macro_precision') if r.aggregate.get('macro_precision') is not none else -1 }}">{{ r.aggregate.get('macro_precision') if r.aggregate.get('macro_precision') is not none else '—' }}</td>
+<td data-v="{{ r.aggregate.get('macro_recall') if r.aggregate.get('macro_recall') is not none else -1 }}">{{ r.aggregate.get('macro_recall') if r.aggregate.get('macro_recall') is not none else '—' }}</td>
 <td>{{ r.model }}</td><td>{{ r.submitted_by }}</td><td>{{ r.submitted_at[:16] }}</td>
-<td><button class="del" onclick="deleteRun('{{ r.run_id }}')">삭제</button></td>
+<td><button class="del" onclick="deleteRun('{{ r.run_id }}', this)">삭제</button></td>
 </tr>
 {% endfor %}
 </tbody></table>
@@ -45,10 +63,23 @@ function gotoDiff(){
   if(sel.length!==2){alert('두 run을 선택하세요');return;}
   location.href='/diff?a='+sel[0]+'&b='+sel[1];
 }
-async function deleteRun(runId){
+async function createReport(btn){
+  // REQ-002: 두 run 선택 → AI 비교 보고서 생성.
+  // 무조건 prompt 제거 — 토큰은 mutateFetch 가 401일 때만 1회 질의 (SRV-009).
+  const sel=[...document.querySelectorAll('.sel:checked')].map(c=>c.value);
+  if(sel.length!==2){alert('두 run을 선택하세요');return;}
+  const r=await mutateFetch(btn,'/api/compare-reports',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({a:sel[0],b:sel[1]})});
+  if(!r) return;   // fetch 예외·토큰 취소/불량 — 헬퍼가 이미 안내·복원함
+  if(r.ok){ location.href='/compare/'+sel[0]+'__'+sel[1]; }
+  else if(r.status===503){ alert('이 서버에서는 보고서 생성이 비활성화되어 있습니다.\n'+await r.text()); }
+  else alert('보고서 생성 실패: '+r.status+'\n'+await r.text());
+}
+async function deleteRun(runId,btn){
   if(!confirm(runId+' 를 삭제할까요? 되돌릴 수 없습니다.')) return;
-  const token=prompt('X-Auth-Token')||'';
-  const r=await fetch('/api/runs/'+runId,{method:'DELETE',headers:{'X-Auth-Token':token}});
+  const r=await mutateFetch(btn,'/api/runs/'+runId,{method:'DELETE'});
+  if(!r) return;
   if(r.ok){ const row=document.getElementById('row-'+runId); if(row) row.remove(); }
   else alert('삭제 실패: '+r.status+'\n'+await r.text());
 }

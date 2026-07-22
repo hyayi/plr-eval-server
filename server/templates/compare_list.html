@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}비교 보고서 목록{% endblock %}
+{% block body %}
+<h1>비교 보고서 <span class="sub" style="display:inline">전체 job 목록</span></h1>
+<div class="sub">created_at 역순 · 자동 갱신 없음 — 새로고침으로 상태를 확인하세요.</div>
+{% if not jobs %}
+<div class="card">생성된 비교 보고서가 없습니다 — 리더보드에서 두 run을 선택해 <b>보고서 생성</b>을 누르세요.</div>
+{% else %}
+<table id="jobs"><thead><tr>
+<th>상태</th><th>pair (상태 페이지)</th><th>run A</th><th>run B</th>
+<th>dataset</th><th>요청 시각</th><th>완료 시각</th>
+</tr></thead><tbody>
+{% for j in jobs %}
+{# 상태 구분: done=ok 배지 / failed·queued·running=warn 배지에 상이한 문구.
+   failed 항목의 상태 페이지 링크는 재기동 전 창(손상 job 등)에서 404 에 도달할
+   수 있다(OBS-1) — 인지하고 그대로 렌더한다 (URL 계약 변경 금지).
+   손상 job 의 finished_at 은 호출마다 변동(OBS-2) — 표시 전용, 정렬 비관여. #}
+<tr>
+<td>{% if j.status == 'done' %}<span class="badge ok">done</span>
+    {% elif j.status == 'failed' %}<span class="badge warn">failed</span>
+    {% else %}<span class="badge warn">진행 중 · {{ j.status }}</span>{% endif %}</td>
+<td><a href="/compare/{{ j.pair }}">{{ j.pair }}</a></td>
+<td>{% if j.run_a %}<a href="/r/{{ j.run_a }}">{{ j.run_a }}</a>{% else %}—{% endif %}</td>
+<td>{% if j.run_b %}<a href="/r/{{ j.run_b }}">{{ j.run_b }}</a>{% else %}—{% endif %}</td>
+<td>{{ j.dataset or '—' }}</td>
+<td>{{ j.created_at or '—' }}</td>
+<td>{{ j.finished_at or '—' }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}

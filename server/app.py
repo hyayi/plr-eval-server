@@ -37,7 +37,12 @@ async def lifespan(app: FastAPI):
     # 요청 수락 전 정합 복구 — DB는 파일 리플레이로 재구축되는 파생 캐시.
     STATE["rebuild"] = reconcile_and_rebuild(root, conn)
     STATE["root"], STATE["conn"] = root, conn
+    # compare-reports(REQ-002): 가용성 판정·에이전트 사본 설치·orphan job 정리.
+    # 실패해도 기동을 막지 않는다 — 기능만 비활성(503) (server/compare.py).
+    from server.compare import init_compare, shutdown_compare
+    STATE["compare"] = init_compare(root)
     yield
+    shutdown_compare()
     conn.close()
     STATE.clear()
 
@@ -452,6 +457,11 @@ async def delete_run(run_id: str) -> dict:
 # Web UI (server/web.py) — API 정의 뒤에 include (web이 app.list_runs를 참조)
 # =====================================================================
 
+from server.compare import router as _compare_router  # noqa: E402
 from server.web import router as _web_router  # noqa: E402
 
+# compare-reports 라우터는 /api/compare-reports/* prefix 만 사용 — /api/runs/
+# 바로 아래 단일 세그먼트 literal 이 없어 GET /api/runs/{run_id} 포획과 무관
+# (INT-002 제약 2). 기존 라우트는 일절 수정하지 않는다.
+app.include_router(_compare_router)
 app.include_router(_web_router)
